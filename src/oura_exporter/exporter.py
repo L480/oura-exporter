@@ -5,7 +5,13 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
 
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    PlatformCollector,
+    ProcessCollector,
+)
 from prometheus_client.metrics_core import (
     GaugeMetricFamily,
     InfoMetricFamily,
@@ -103,6 +109,8 @@ class Exporter:
         self.registry = CollectorRegistry()
         self._collector = OuraCollector(self._categories)
         self.registry.register(self._collector)
+        ProcessCollector(registry=self.registry)
+        PlatformCollector(registry=self.registry)
 
         Gauge(
             "oura_exporter_build_info",
@@ -153,8 +161,9 @@ class Exporter:
     def poll(self, stop: threading.Event | None = None) -> None:
         if self._monotonic() < self._paused_until:
             logger.debug("paused after a rate limit; skipping this cycle")
+            self._mark_not_refreshed(self._categories)
             return
-        for category in self._categories:
+        for index, category in enumerate(self._categories):
             if stop is not None and stop.is_set():
                 return
             state = self._states[category.name]
@@ -162,7 +171,14 @@ class Exporter:
             if now < state.next_due:
                 continue
             if not self._poll_category(category, state, now):
+                self._mark_not_refreshed(self._categories[index + 1 :])
                 return
+
+    def _mark_not_refreshed(self, categories: Sequence[Category]) -> None:
+        now = self._monotonic()
+        for category in categories:
+            if now >= self._states[category.name].next_due:
+                self._up.labels(category.name).set(0)
 
     def _poll_category(self, category: Category, state: CategoryState, now: float) -> bool:
         try:

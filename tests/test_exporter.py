@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 import requests
 import responses
+from prometheus_client import ProcessCollector
 
 from oura_exporter import __version__
 from oura_exporter import exporter as exporter_module
@@ -29,6 +30,20 @@ from .helpers import (
 )
 
 CATEGORIES = list(ENDPOINTS)
+
+
+def error_reasons(rig: Rig, category: str) -> set[str]:
+    return {
+        sample.labels["reason"]
+        for family in rig.exporter.registry.collect()
+        if family.name == "oura_exporter_category_errors"
+        for sample in family.samples
+        if sample.name.endswith("_total") and sample.labels["category"] == category
+    }
+
+
+def process_metrics_available() -> bool:
+    return bool(list(ProcessCollector(registry=None).collect()))
 
 
 def poll_records(caplog: pytest.LogCaptureFixture, level: int) -> list[logging.LogRecord]:
@@ -245,7 +260,7 @@ class TestScheduling:
         assert len(rig.rsps.calls) == 1
         assert rig.up("daily_activity") == 0
         assert rig.errors("daily_activity", "rate_limited") == 1
-        assert rig.up("daily_readiness") is None
+        assert rig.up("daily_readiness") == 0
 
         rig.advance(60)
         rig.exporter.poll()
@@ -274,6 +289,7 @@ class TestScheduling:
         rig.exporter._fetch = fetch_then_stop  # type: ignore[method-assign]
         rig.exporter.poll(stop)
         assert len(rig.rsps.calls) == 1
+        assert rig.up("daily_readiness") is None
 
 
 class TestFailureIsolation:
@@ -333,7 +349,8 @@ class TestFailureIsolation:
         assert rig.value("oura_exporter_auth_ok") == 0
         assert rig.errors("daily_activity", "auth") == 1
         assert rig.up("daily_activity") == 0
-        assert rig.up("daily_readiness") is None
+        assert rig.up("daily_readiness") == 0
+        assert error_reasons(rig, "daily_readiness") == set()
         assert len(rig.calls("daily_activity")) == 0
 
         rig.advance(300)
@@ -361,7 +378,7 @@ class TestFailureIsolation:
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
         assert rig.errors("daily_activity", "auth") == 1
-        assert rig.up("daily_readiness") is None
+        assert rig.up("daily_readiness") == 0
         assert len(rig.calls("daily_activity")) == 2
 
         rig.advance(300)
@@ -373,6 +390,126 @@ class TestFailureIsolation:
         rig.advance(300)
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 1
+
+
+class TestAbortedCycles:
+    def limit(self, rig: Rig, endpoint: str, retry_after: int = 120) -> None:
+        rig.rsps.replace(
+            responses.GET,
+            api_url(endpoint),
+            status=429,
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    def test_a_rate_limit_marks_every_due_category_down_quietly(
+        self, rig: Rig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self.limit(rig, "daily_activity")
+        with caplog.at_level(logging.DEBUG, logger="oura_exporter.exporter"):
+            rig.exporter.poll()
+        assert {category: rig.up(category) for category in CATEGORIES} == dict.fromkeys(
+            CATEGORIES, 0
+        )
+        assert error_reasons(rig, "daily_activity") == {"rate_limited"}
+        for category in CATEGORIES[1:]:
+            assert error_reasons(rig, category) == set()
+            assert not any(category in record.getMessage() for record in caplog.records)
+        assert len(poll_records(caplog, logging.WARNING)) == 1
+        assert poll_records(caplog, logging.INFO) == []
+
+    def test_a_rate_limit_mid_cycle_leaves_categories_that_are_not_due_alone(
+        self, rig: Rig
+    ) -> None:
+        rig.exporter.poll()
+        rig.advance(300)
+        self.limit(rig, "daily_resilience")
+        rig.exporter.poll()
+        assert {category: rig.up(category) for category in CATEGORIES} == {
+            "daily_activity": 1,
+            "daily_readiness": 1,
+            "daily_resilience": 0,
+            "daily_sleep": 0,
+            "daily_spo2": 0,
+            "daily_stress": 0,
+            "sleep": 0,
+            "heartrate": 0,
+            "ring_battery_level": 0,
+            "personal_info": 1,
+        }
+        assert error_reasons(rig, "daily_resilience") == {"rate_limited"}
+        assert error_reasons(rig, "daily_sleep") == set()
+        assert rig.value("oura_daily_sleep_score") == 84
+
+    def test_a_later_success_sets_every_category_up_again(self, rig: Rig) -> None:
+        self.limit(rig, "daily_activity")
+        rig.exporter.poll()
+        register_endpoint(rig.rsps, "daily_activity", replace=True)
+        rig.advance(121)
+        rig.exporter.poll()
+        assert all(rig.up(category) == 1 for category in CATEGORIES)
+
+    def test_categories_that_become_due_during_a_pause_are_marked_down(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        rig.advance(3300)
+        self.limit(rig, "daily_activity", retry_after=3600)
+        rig.exporter.poll()
+        assert rig.up("personal_info") == 1
+
+        rig.advance(300)
+        calls = len(rig.rsps.calls)
+        rig.exporter.poll()
+        assert len(rig.rsps.calls) == calls
+        assert rig.up("personal_info") == 0
+        assert error_reasons(rig, "personal_info") == set()
+
+    def test_an_authentication_failure_marks_the_rest_of_the_cycle_down(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        rig.advance(300)
+        rig.rsps.replace(responses.GET, api_url("daily_readiness"), status=401)
+        rig.rsps.post(
+            TOKEN_URL,
+            json={"access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600},
+        )
+        rig.exporter.poll()
+        assert rig.value("oura_exporter_auth_ok") == 0
+        assert {category: rig.up(category) for category in CATEGORIES} == {
+            "daily_activity": 1,
+            "daily_readiness": 0,
+            "daily_resilience": 0,
+            "daily_sleep": 0,
+            "daily_spo2": 0,
+            "daily_stress": 0,
+            "sleep": 0,
+            "heartrate": 0,
+            "ring_battery_level": 0,
+            "personal_info": 1,
+        }
+        assert error_reasons(rig, "daily_readiness") == {"auth"}
+        assert error_reasons(rig, "daily_resilience") == set()
+
+
+class TestStandardMetrics:
+    def test_platform_info_is_exposed(self, rig: Rig) -> None:
+        names = {family.name for family in rig.exporter.registry.collect()}
+        assert "python_info" in names
+        assert 'python_info{implementation="' in rig.text()
+
+    @pytest.mark.skipif(
+        not process_metrics_available(), reason="ProcessCollector yields nothing without /proc"
+    )
+    def test_process_metrics_are_exposed(self, rig: Rig) -> None:
+        names = {family.name for family in rig.exporter.registry.collect()}
+        assert {
+            "process_resident_memory_bytes",
+            "process_cpu_seconds",
+            "process_start_time_seconds",
+        } <= names
+        assert (rig.value("process_resident_memory_bytes") or 0) > 0
+
+    def test_oura_families_are_still_exposed(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        names = {family.name for family in rig.exporter.registry.collect()}
+        assert {"oura_daily_activity_score", "oura_exporter_auth_ok"} <= names
 
 
 class TestLogging:

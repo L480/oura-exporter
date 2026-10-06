@@ -154,6 +154,16 @@ class OAuthClient:
         return body
 
 
+def _scope_text(value: object) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        text = " ".join(value).strip()
+    else:
+        return None
+    return text or None
+
+
 def token_from_response(
     response: Mapping[str, Any], *, previous: Token | None, client_id: str | None, now: float
 ) -> Token:
@@ -178,15 +188,15 @@ def token_from_response(
     if expires_at is None:
         logger.warning("token response has no usable expires_in; the expiry is unknown")
 
-    scope = response.get("scope")
-    if previous is not None and previous.scope is not None:
+    scope = _scope_text(response.get("scope"))
+    if scope is None and previous is not None:
         scope = previous.scope
     return Token(
         access_token=response["access_token"],
         refresh_token=refresh_token,
         expires_at=expires_at,
         client_id=client_id,
-        scope=scope if isinstance(scope, str) and scope else None,
+        scope=scope,
     )
 
 
@@ -202,6 +212,13 @@ class TokenManager:
         self._next_refresh_at = 0.0
         self._last_error: AuthError | None = None
         self._suspect: set[str] = set()
+
+    def install(self, token: Token, *, persisted: bool = True) -> None:
+        self.token = token
+        self.persisted = persisted
+        self._next_refresh_at = 0.0
+        self._last_error = None
+        self._suspect = set()
 
     def now(self) -> float:
         return self._clock()
@@ -405,10 +422,39 @@ def _finish_consent(
             f"{exc}; the code is used up, authorize again once the directory is writable"
         ) from exc
     store.clear_pending()
-    manager.token = token
-    manager.persisted = True
+    manager.install(token)
     logger.info("authorization complete; token stored at %s", store.token_path)
     _warn_missing_scopes(settings.scopes, response.get("scope"))
+
+
+def _exchange_provided_code(
+    oauth: OAuthClient,
+    pending: PendingAuthorization,
+    code: str,
+    *,
+    fresh: bool,
+    authorize_url: str,
+    interactive: bool,
+) -> dict[str, Any] | None:
+    cause: AuthError | None = None
+    if fresh:
+        reason = "no pending authorization matches it"
+        message = (
+            "no pending authorization matches this code; open the URL below, then set "
+            "OURA_AUTH_CODE to the new code"
+        )
+    else:
+        try:
+            return _exchange(oauth, pending, code)
+        except AuthError as exc:
+            cause, reason, message = exc, str(exc), _rejected_message(exc)
+    if not interactive:
+        raise ConsentRequired(message, authorize_url) from cause
+    logger.warning(
+        "the provided authorization code was not usable (%s); asking interactively instead",
+        reason,
+    )
+    return None
 
 
 def _consent(
@@ -432,28 +478,22 @@ def _consent(
             ) from exc
     authorize_url = oauth.authorize_url(pending)
 
+    response: dict[str, Any] | None = None
     code = settings.read_auth_code()
     if code is not None:
-        if fresh:
+        response = _exchange_provided_code(
+            oauth, pending, code, fresh=fresh, authorize_url=authorize_url, interactive=interactive
+        )
+    if response is None:
+        if not interactive:
             raise ConsentRequired(
-                "no pending authorization matches this code; open the URL below, then set "
-                "OURA_AUTH_CODE to the new code",
+                "no stored Oura token; open the URL below and approve access, then either run "
+                "interactively (for example `docker compose run --rm -it oura-exporter`) and "
+                "paste the code, or set OURA_AUTH_CODE / OURA_AUTH_CODE_FILE to the code (or the "
+                "full redirect URL) and restart",
                 authorize_url,
             )
-        try:
-            response = _exchange(oauth, pending, code)
-        except AuthError as exc:
-            raise ConsentRequired(_rejected_message(exc), authorize_url) from exc
-    elif interactive:
         response = _prompt_for_code(oauth, pending, authorize_url)
-    else:
-        raise ConsentRequired(
-            "no stored Oura token; open the URL below and approve access, then either run "
-            "interactively (for example `docker compose run --rm -it oura-exporter`) and paste "
-            "the code, or set OURA_AUTH_CODE / OURA_AUTH_CODE_FILE to the code (or the full "
-            "redirect URL) and restart",
-            authorize_url,
-        )
     _finish_consent(manager, store, settings, response)
 
 
@@ -483,7 +523,7 @@ def authenticate(
         logger.warning("ignoring the stored token: it was issued to a different client_id")
         token = None
     if token is not None:
-        manager.token = token
+        manager.install(token)
         if _stored_token_usable(manager, settings):
             return
         manager.token = None

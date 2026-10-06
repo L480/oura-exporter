@@ -352,6 +352,75 @@ class TestTokenManager:
         assert env.manager.access_token() == "access-2"
         assert len(env.rsps.calls) == 1
 
+    def test_refreshed_scope_comes_from_the_response(self, env: Env) -> None:
+        token_endpoint(env.rsps, json=token_response(scope="personal daily"))
+        env.manager.token = stored_token(
+            env, expires_in=10, scope="personal daily heartrate spo2 stress"
+        )
+        refreshed = env.manager.refresh()
+        assert refreshed.scope == "personal daily"
+        assert read_token_file(env)["scope"] == "personal daily"
+
+    @pytest.mark.parametrize("granted", [None, "", "   ", 42, ["personal", 1], []])
+    def test_refresh_keeps_the_previous_scope_when_the_response_has_none(
+        self, env: Env, granted: Any
+    ) -> None:
+        token_endpoint(env.rsps, json=token_response(scope=granted))
+        env.manager.token = stored_token(env, expires_in=10, scope="personal daily")
+        assert env.manager.refresh().scope == "personal daily"
+        assert read_token_file(env)["scope"] == "personal daily"
+
+    def test_refreshed_scope_may_be_a_list(self, env: Env) -> None:
+        token_endpoint(env.rsps, json=token_response(scope=["personal", "spo2"]))
+        env.manager.token = stored_token(env, expires_in=10, scope="personal daily")
+        assert env.manager.refresh().scope == "personal spo2"
+
+    def test_refreshed_scope_fills_in_an_unknown_previous_scope(self, env: Env) -> None:
+        token_endpoint(env.rsps, json=token_response(scope="personal"))
+        env.manager.token = stored_token(env, expires_in=10, scope=None)
+        assert env.manager.refresh().scope == "personal"
+
+    def test_install_sets_the_token_and_persisted(self, env: Env) -> None:
+        token = Token("access-9", "refresh-9", None, CLIENT_ID)
+        env.manager.install(token)
+        assert env.manager.token == token
+        assert env.manager.persisted is True
+        env.manager.install(token, persisted=False)
+        assert env.manager.persisted is False
+
+    def test_install_clears_the_refresh_backoff(self, env: Env) -> None:
+        token_endpoint(env.rsps, status=503)
+        env.manager.token = stored_token(env, expires_in=10)
+        with pytest.raises(AuthError):
+            env.manager.refresh()
+        with pytest.raises(AuthError, match="paused"):
+            env.manager.refresh()
+
+        env.rsps.replace(
+            responses.POST,
+            TOKEN_URL,
+            json=token_response(access_token="access-3", refresh_token="refresh-3"),
+        )
+        env.manager.install(Token("access-9", "refresh-9", None, CLIENT_ID))
+        assert env.manager.refresh().access_token == "access-3"
+        assert len(env.rsps.calls) == 2
+
+    def test_install_forgets_distrusted_tokens(self, env: Env) -> None:
+        token_endpoint(env.rsps, json=token_response())
+        env.manager.token = stored_token(env, expires_in=3600)
+        assert env.manager.handle_unauthorized("access-1") is True
+        assert env.manager.handle_unauthorized("access-2") is False
+
+        env.rsps.replace(
+            responses.POST,
+            TOKEN_URL,
+            json=token_response(access_token="access-3", refresh_token="refresh-3"),
+        )
+        env.manager.install(Token("access-2", "refresh-2", None, CLIENT_ID))
+        assert env.manager.handle_unauthorized("access-2") is True
+        assert env.manager.token is not None
+        assert env.manager.token.access_token == "access-3"
+
     def test_refresh_stamps_the_current_client_on_old_format_tokens(self, env: Env) -> None:
         token_endpoint(env.rsps, json=token_response())
         env.manager.token = stored_token(env, expires_in=10, client_id=None, scope=None)
@@ -644,6 +713,36 @@ class TestAuthenticateWithStoredToken:
         assert env.manager.token is None
         assert "state" in public_url(caught.value)
         assert env.store.load_pending() is not None
+
+    def test_consent_after_a_permanent_startup_failure_does_not_inherit_the_backoff(
+        self, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stored_token(env, expires_in=-10)
+        env.rsps.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
+        env.rsps.post(TOKEN_URL, json=token_response(expires_in=30))
+        env.rsps.post(
+            TOKEN_URL, json=token_response(access_token="access-3", refresh_token="refresh-3")
+        )
+        run_inputs(monkeypatch, ["PROMPTED"])
+        authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=True)
+        assert env.manager.token is not None
+        assert env.manager.token.access_token == "access-2"
+
+        assert env.manager.access_token() == "access-3"
+        calls = env.token_calls()
+        assert [call["grant_type"] for call in calls] == [
+            "refresh_token",
+            "authorization_code",
+            "refresh_token",
+        ]
+        assert calls[2]["refresh_token"] == "refresh-2"
+        assert read_token_file(env)["refresh_token"] == "refresh-3"
+
+    def test_the_stored_token_starts_without_leftover_state(self, env: Env) -> None:
+        stored_token(env, expires_in=3600)
+        env.manager.persisted = False
+        authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=False)
+        assert env.manager.persisted is True
 
     def test_expired_token_without_refresh_token_falls_through_to_consent(self, env: Env) -> None:
         stored_token(env, expires_in=-10, refresh_token=None)
@@ -979,16 +1078,132 @@ class TestInteractive:
         with pytest.raises(ConsentRequired, match="no input available"):
             authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=True)
 
-    def test_a_provided_code_takes_precedence_over_the_prompt(
+    def test_a_provided_code_without_a_pending_authorization_falls_back_to_the_prompt(
+        self,
+        env: Env,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        token_endpoint(env.rsps, json=token_response())
+        prompts = run_inputs(monkeypatch, ["PROMPTED"])
+        with caplog.at_level(logging.WARNING):
+            authenticate(
+                env.manager,
+                env.store,
+                env.oauth,
+                env.settings(OURA_AUTH_CODE="STALE"),
+                interactive=True,
+            )
+        assert "the provided authorization code was not usable" in caplog.text
+        assert "no pending authorization matches it" in caplog.text
+        assert "asking interactively instead" in caplog.text
+        assert "STALE" not in caplog.text
+        assert len(prompts) == 1
+        calls = env.token_calls()
+        assert [call["code"] for call in calls] == ["PROMPTED"]
+        printed = capsys.readouterr().out
+        assert f"code_challenge={challenge_for(calls[0]['code_verifier'])}" in printed
+        assert env.manager.token is not None
+        assert env.store.load_pending() is None
+
+    def test_a_rejected_provided_code_falls_back_to_the_prompt_with_the_same_url(
+        self,
+        env: Env,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        with pytest.raises(ConsentRequired) as first:
+            authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=False)
+        pending = env.store.load_pending()
+        assert pending is not None
+        env.rsps.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
+        env.rsps.post(TOKEN_URL, json=token_response())
+        prompts = run_inputs(monkeypatch, ["GOOD"])
+        with caplog.at_level(logging.WARNING):
+            authenticate(
+                env.fresh_manager(),
+                env.store,
+                env.oauth,
+                env.settings(OURA_AUTH_CODE="USED"),
+                interactive=True,
+            )
+        assert "the provided authorization code was not usable" in caplog.text
+        assert "invalid_grant" in caplog.text
+        assert len(prompts) == 1
+        calls = env.token_calls()
+        assert [call["code"] for call in calls] == ["USED", "GOOD"]
+        assert {call["code_verifier"] for call in calls} == {pending.code_verifier}
+        assert first.value.authorize_url in capsys.readouterr().out
+        assert env.store.load_pending() is None
+
+    def test_a_provided_url_with_the_wrong_state_falls_back_to_the_prompt(
+        self,
+        env: Env,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with pytest.raises(ConsentRequired):
+            authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=False)
+        token_endpoint(env.rsps, json=token_response())
+        run_inputs(monkeypatch, ["GOOD"])
+        with caplog.at_level(logging.WARNING):
+            authenticate(
+                env.fresh_manager(),
+                env.store,
+                env.oauth,
+                env.settings(OURA_AUTH_CODE=f"{REDIRECT}?code=STOLEN&state=another-attempt"),
+                interactive=True,
+            )
+        assert "state mismatch" in caplog.text
+        assert [call["code"] for call in env.token_calls()] == ["GOOD"]
+
+    def test_a_usable_provided_code_needs_no_prompt(
+        self,
+        env: Env,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with pytest.raises(ConsentRequired):
+            authenticate(env.manager, env.store, env.oauth, env.settings(), interactive=False)
+        token_endpoint(env.rsps, json=token_response())
+        prompts = run_inputs(monkeypatch, [])
+        with caplog.at_level(logging.WARNING):
+            authenticate(
+                env.fresh_manager(),
+                env.store,
+                env.oauth,
+                env.settings(OURA_AUTH_CODE="GOOD"),
+                interactive=True,
+            )
+        assert prompts == []
+        assert "not usable" not in caplog.text
+        assert [call["code"] for call in env.token_calls()] == ["GOOD"]
+
+    def test_the_prompt_still_gives_up_after_an_unusable_provided_code(
         self, env: Env, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        prompts = run_inputs(monkeypatch, [])
+        prompts = run_inputs(monkeypatch, ["two words", "still two", "three words"])
+        with pytest.raises(ConsentRequired, match="giving up after 3 attempts"):
+            authenticate(
+                env.manager,
+                env.store,
+                env.oauth,
+                env.settings(OURA_AUTH_CODE="STALE"),
+                interactive=True,
+            )
+        assert len(prompts) == 3
+        assert len(env.rsps.calls) == 0
+        assert env.store.load_pending() is not None
+
+    def test_without_a_tty_an_unusable_provided_code_still_fails(self, env: Env) -> None:
         with pytest.raises(ConsentRequired, match="no pending authorization matches"):
             authenticate(
                 env.manager,
                 env.store,
                 env.oauth,
-                env.settings(OURA_AUTH_CODE="CODE"),
-                interactive=True,
+                env.settings(OURA_AUTH_CODE="STALE"),
+                interactive=False,
             )
-        assert prompts == []
+        assert len(env.rsps.calls) == 0
