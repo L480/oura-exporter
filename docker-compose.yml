@@ -1,17 +1,17 @@
 services:
   oura-exporter:
-    build: .
-    container_name: oura-exporter
+    image: ghcr.io/l480/oura-exporter:latest
+    env_file: .env
     ports:
-      - "8000:8000"
-    environment:
-      - OURA_CLIENT_ID=${OURA_CLIENT_ID}
-      - OURA_CLIENT_SECRET=${OURA_CLIENT_SECRET}
-      - OURA_REDIRECT_URI=${OURA_REDIRECT_URI:-http://localhost:8000/callback}
-      - OURA_SCOPES=${OURA_SCOPES:-email personal daily heartrate spo2 stress}
-      - OURA_AUTH_CODE=${OURA_AUTH_CODE:-}
-      - OURA_AUTH_CODE_FILE=${OURA_AUTH_CODE_FILE:-}
-      - TZ=${TZ}
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./oauth_token.json:/root/.config/oura-exporter/oauth_token.json
+      - oura-data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
+
+volumes:
+  oura-data:
