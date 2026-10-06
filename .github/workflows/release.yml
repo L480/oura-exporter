@@ -1,0 +1,182 @@
+name: Release
+
+# Publishing happens ONLY here, and ONLY when a `v*` release tag is pushed:
+# multi-arch image (amd64+arm64) to GHCR with semver + latest + sha- tags,
+# cosign-signed, plus a GitHub Release. Plain pushes to main never publish
+# anything.
+#
+# amd64 and arm64 build on native runners (no QEMU) and are merged into one
+# manifest list in the `merge` job - the documented buildx
+# "distribute build across multiple runners" pattern.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Each tag gets its own group - a real release build should never be
+  # cancelled mid-push by another one, so this only guards against the same
+  # tag somehow being pushed twice.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    # workflow_dispatch is kept only to re-run a release for an existing tag
+    # (e.g. after a flaky build) -- never to publish `latest`/a fresh build
+    # from an arbitrary branch. A manual run must still be triggered against
+    # a `v*` tag ref.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lowercase repository owner
+        run: echo "REPO_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "${GITHUB_ENV}"
+
+      - name: Filename-safe platform pair
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "${GITHUB_ENV}"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ env.REPO_OWNER }}/oura-exporter
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ env.REPO_OWNER }}/oura-exporter,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest & sign
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing
+    outputs:
+      digest: ${{ steps.resolve.outputs.digest }}
+    steps:
+      - name: Lowercase repository owner
+        run: echo "REPO_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "${GITHUB_ENV}"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ env.REPO_OWNER }}/oura-exporter
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+          sources=$(printf "ghcr.io/${REPO_OWNER}/oura-exporter@sha256:%s " *)
+          # shellcheck disable=SC2086
+          docker buildx imagetools create ${tags} ${sources}
+
+      - id: resolve
+        name: Resolve manifest-list digest
+        run: |
+          digest=$(docker buildx imagetools inspect "ghcr.io/${REPO_OWNER}/oura-exporter:${{ steps.meta.outputs.version }}" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign image (keyless)
+        run: |
+          cosign sign --yes "ghcr.io/${REPO_OWNER}/oura-exporter@${{ steps.resolve.outputs.digest }}"
+
+  github-release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [merge]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - id: tag_message
+        name: Read annotated tag message
+        run: |
+          delim="EOF_$(openssl rand -hex 16)"
+          {
+            echo "body<<${delim}"
+            git tag -l --format='%(contents)' "${GITHUB_REF_NAME}"
+            echo "${delim}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          body: ${{ steps.tag_message.outputs.body }}
+          append_body: true
+          generate_release_notes: true

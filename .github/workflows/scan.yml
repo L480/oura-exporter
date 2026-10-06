@@ -1,0 +1,53 @@
+name: Scheduled image scan
+
+# Nightly scan of the published `:latest` image so a newly-disclosed
+# base-image CVE surfaces without needing a new commit.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy-image:
+    name: Trivy image scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: Lowercase repository owner
+        run: echo "REPO_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "${GITHUB_ENV}"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Check that the image has been published
+        run: |
+          if docker manifest inspect "ghcr.io/${REPO_OWNER}/oura-exporter:latest" > /dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::ghcr.io/${REPO_OWNER}/oura-exporter:latest does not exist yet; skipping the scan"
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: steps.image.outputs.exists == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ env.REPO_OWNER }}/oura-exporter:latest
+          severity: HIGH,CRITICAL
+          # Debian security fixes lag upstream disclosure for many packages, so
+          # without this Trivy floods Code Scanning with CVEs that have no
+          # available fix yet.
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-results.sarif
+      # SARIF upload needs a public repo or GHAS.
+      - if: always() && steps.image.outputs.exists == 'true' && !github.event.repository.private
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-image-results.sarif
