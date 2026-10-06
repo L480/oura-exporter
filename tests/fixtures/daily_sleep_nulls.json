@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000402",
+      "contributors": {
+        "deep_sleep": null,
+        "efficiency": null,
+        "latency": null,
+        "rem_sleep": null,
+        "restfulness": null,
+        "timing": null,
+        "total_sleep": null
+      },
+      "day": "2026-10-06",
+      "score": null,
+      "timestamp": "2026-10-06T00:00:00+00:00"
+    }
+  ],
+  "next_token": null
+}

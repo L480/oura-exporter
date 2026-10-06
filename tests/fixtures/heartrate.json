@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "bpm": 61,
+      "source": "awake",
+      "timestamp": "2026-10-06T07:03:00+00:00",
+      "timestamp_unix": 1791270180000
+    },
+    {
+      "bpm": 57,
+      "source": "rest",
+      "timestamp": "2026-10-06T07:09:00+00:00",
+      "timestamp_unix": 1791270540000
+    },
+    {
+      "bpm": 64,
+      "source": "awake",
+      "timestamp": "2026-10-06T06:59:00+00:00",
+      "timestamp_unix": 1791269940000
+    }
+  ],
+  "next_token": null
+}

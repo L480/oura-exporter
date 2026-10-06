@@ -1,0 +1,137 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000102",
+      "class_5_min": "1111222333344445555",
+      "score": 81,
+      "active_calories": 455,
+      "average_met_minutes": 1.40625,
+      "contributors": {
+        "meet_daily_targets": 72,
+        "move_every_hour": 85,
+        "recovery_time": 100,
+        "stay_active": 61,
+        "training_frequency": 90,
+        "training_volume": 88
+      },
+      "equivalent_walking_distance": 6120,
+      "high_activity_met_minutes": 14,
+      "high_activity_time": 480,
+      "inactivity_alerts": 1,
+      "low_activity_met_minutes": 96,
+      "low_activity_time": 7260,
+      "medium_activity_met_minutes": 41,
+      "medium_activity_time": 1380,
+      "met": {
+        "interval": 60,
+        "items": [
+          0.9,
+          1.0,
+          1.2,
+          2.4
+        ],
+        "timestamp": "2026-10-05T04:00:00+00:00"
+      },
+      "meters_to_target": 1380,
+      "non_wear_time": 2400,
+      "resting_time": 18420,
+      "sedentary_met_minutes": 8,
+      "sedentary_time": 29940,
+      "steps": 9312,
+      "target_calories": 450,
+      "target_meters": 7500,
+      "timestamp": "2026-10-05T04:00:00+00:00",
+      "total_calories": 2493,
+      "day": "2026-10-05"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000103",
+      "class_5_min": "1111222333344445555",
+      "score": 78,
+      "active_calories": 412,
+      "average_met_minutes": 1.40625,
+      "contributors": {
+        "meet_daily_targets": 72,
+        "move_every_hour": 85,
+        "recovery_time": 100,
+        "stay_active": 61,
+        "training_frequency": 90,
+        "training_volume": 88
+      },
+      "equivalent_walking_distance": 6120,
+      "high_activity_met_minutes": 14,
+      "high_activity_time": 480,
+      "inactivity_alerts": 1,
+      "low_activity_met_minutes": 96,
+      "low_activity_time": 7260,
+      "medium_activity_met_minutes": 41,
+      "medium_activity_time": 1380,
+      "met": {
+        "interval": 60,
+        "items": [
+          0.9,
+          1.0,
+          1.2,
+          2.4
+        ],
+        "timestamp": "2026-10-06T04:00:00+00:00"
+      },
+      "meters_to_target": 1380,
+      "non_wear_time": 2400,
+      "resting_time": 18420,
+      "sedentary_met_minutes": 8,
+      "sedentary_time": 29940,
+      "steps": 8731,
+      "target_calories": 450,
+      "target_meters": 7500,
+      "timestamp": "2026-10-06T04:00:00+00:00",
+      "total_calories": 2493,
+      "day": "2026-10-06"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000101",
+      "class_5_min": "1111222333344445555",
+      "score": 69,
+      "active_calories": 301,
+      "average_met_minutes": 1.40625,
+      "contributors": {
+        "meet_daily_targets": 72,
+        "move_every_hour": 85,
+        "recovery_time": 100,
+        "stay_active": 61,
+        "training_frequency": 90,
+        "training_volume": 88
+      },
+      "equivalent_walking_distance": 6120,
+      "high_activity_met_minutes": 14,
+      "high_activity_time": 480,
+      "inactivity_alerts": 1,
+      "low_activity_met_minutes": 96,
+      "low_activity_time": 7260,
+      "medium_activity_met_minutes": 41,
+      "medium_activity_time": 1380,
+      "met": {
+        "interval": 60,
+        "items": [
+          0.9,
+          1.0,
+          1.2,
+          2.4
+        ],
+        "timestamp": "2026-10-04T04:00:00+00:00"
+      },
+      "meters_to_target": 1380,
+      "non_wear_time": 2400,
+      "resting_time": 18420,
+      "sedentary_met_minutes": 8,
+      "sedentary_time": 29940,
+      "steps": 5110,
+      "target_calories": 450,
+      "target_meters": 7500,
+      "timestamp": "2026-10-04T04:00:00+00:00",
+      "total_calories": 2493,
+      "day": "2026-10-04"
+    }
+  ],
+  "next_token": null
+}

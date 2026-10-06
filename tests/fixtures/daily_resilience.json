@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000301",
+      "day": "2026-10-05",
+      "contributors": {
+        "sleep_recovery": 61.5,
+        "daytime_recovery": 48.2,
+        "stress": 73.9
+      },
+      "level": "adequate"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000302",
+      "day": "2026-10-06",
+      "contributors": {
+        "sleep_recovery": 61.5,
+        "daytime_recovery": 48.2,
+        "stress": 73.9
+      },
+      "level": "solid"
+    }
+  ],
+  "next_token": null
+}

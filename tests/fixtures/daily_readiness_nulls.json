@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000202",
+      "contributors": {
+        "activity_balance": null,
+        "body_temperature": null,
+        "hrv_balance": null,
+        "previous_day_activity": null,
+        "previous_night": null,
+        "recovery_index": null,
+        "resting_heart_rate": null,
+        "sleep_balance": null,
+        "sleep_regularity": null
+      },
+      "day": "2026-10-06",
+      "score": null,
+      "temperature_deviation": null,
+      "temperature_trend_deviation": null,
+      "timestamp": "2026-10-06T00:00:00+00:00"
+    }
+  ],
+  "next_token": null
+}

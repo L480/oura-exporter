@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000502",
+      "day": "2026-10-06",
+      "breathing_disturbance_index": null,
+      "spo2_percentage": null
+    }
+  ],
+  "next_token": null
+}
