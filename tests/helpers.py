@@ -84,6 +84,7 @@ class FakeClock:
 
 
 WALL = 1_800_000_000.0
+CATEGORY_ORDER = tuple(category.name for category in load_definitions())
 
 
 @dataclass

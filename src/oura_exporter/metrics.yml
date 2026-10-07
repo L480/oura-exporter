@@ -1,144 +1,58 @@
 categories:
-  - name: daily_activity
-    title: Activity
-    summary: latest day
+  - name: sleep
+    title: Sleep
+    summary: main sleep of the latest night
     kind: daily
-    prefix: oura_daily_activity_
+    prefix: oura_sleep_
+    select:
+      type: long_sleep
+    sort_by: bedtime_end
     metrics:
-      - name: score
-        help: Activity score (1-100).
-      - name: active_calories_kilocalories
-        path: active_calories
-        help: Active calories burned, in kilocalories.
-      - name: average_met_minutes
-        help: Average MET (metabolic equivalent of task) minutes.
-      - name: contributors_meet_daily_targets
-        path: contributors.meet_daily_targets
-        help: Score contribution of meeting the daily activity targets of the previous 7 days (1-100).
-      - name: contributors_move_every_hour
-        path: contributors.move_every_hour
-        help: Score contribution of moving every hour, from inactivity alerts of the previous 24 hours (1-100).
-      - name: contributors_recovery_time
-        path: contributors.recovery_time
-        help: Score contribution of recovery time over the previous 7 days (1-100).
-      - name: contributors_stay_active
-        path: contributors.stay_active
-        help: Score contribution of staying active over the previous 24 hours (1-100).
-      - name: contributors_training_frequency
-        path: contributors.training_frequency
-        help: Score contribution of exercise frequency over the previous 7 days (1-100).
-      - name: contributors_training_volume
-        path: contributors.training_volume
-        help: Score contribution of exercise volume over the previous 7 days (1-100).
-      - name: equivalent_walking_distance_meters
-        path: equivalent_walking_distance
-        help: Walking distance equivalent to the energy expenditure of the day, in meters.
-      - name: high_activity_met_minutes
-        help: MET minutes spent in high activity.
-      - name: high_activity_time_seconds
-        path: high_activity_time
-        help: Time spent in high activity, in seconds.
-      - name: inactivity_alerts
-        help: Inactivity alerts received.
-      - name: low_activity_met_minutes
-        help: MET minutes spent in low activity.
-      - name: low_activity_time_seconds
-        path: low_activity_time
-        help: Time spent in low activity, in seconds.
-      - name: medium_activity_met_minutes
-        help: MET minutes spent in medium activity.
-      - name: medium_activity_time_seconds
-        path: medium_activity_time
-        help: Time spent in medium activity, in seconds.
-      - name: meters_to_target
-        help: Meters remaining to the daily target.
-      - name: non_wear_time_seconds
-        path: non_wear_time
-        help: Time the ring was not worn, in seconds.
-      - name: resting_time_seconds
-        path: resting_time
-        help: Resting time, in seconds.
-      - name: sedentary_met_minutes
-        help: MET minutes spent sedentary.
-      - name: sedentary_time_seconds
-        path: sedentary_time
-        help: Sedentary time, in seconds.
-      - name: steps
-        help: Steps taken.
-      - name: target_calories_kilocalories
-        path: target_calories
-        help: Daily activity calorie target, in kilocalories.
-      - name: target_meters
-        help: Daily activity target, in meters.
-      - name: total_calories_kilocalories
-        path: total_calories
-        help: Total calories burned, in kilocalories.
-
-  - name: daily_readiness
-    title: Readiness
-    summary: latest day
-    kind: daily
-    prefix: oura_daily_readiness_
-    metrics:
-      - name: score
-        help: Readiness score (1-100).
-      - name: contributors_activity_balance
-        path: contributors.activity_balance
-        help: Score contribution of the cumulative activity balance (1-100).
-      - name: contributors_body_temperature
-        path: contributors.body_temperature
-        help: Score contribution of body temperature (1-100).
-      - name: contributors_hrv_balance
-        path: contributors.hrv_balance
-        help: Score contribution of heart rate variability balance (1-100).
-      - name: contributors_previous_day_activity
-        path: contributors.previous_day_activity
-        help: Score contribution of the previous day's activity (1-100).
-      - name: contributors_previous_night
-        path: contributors.previous_night
-        help: Score contribution of the previous night's sleep (1-100).
-      - name: contributors_recovery_index
-        path: contributors.recovery_index
-        help: Score contribution of the recovery index (1-100).
-      - name: contributors_resting_heart_rate
-        path: contributors.resting_heart_rate
-        help: Score contribution of the resting heart rate (1-100).
-      - name: contributors_sleep_balance
-        path: contributors.sleep_balance
-        help: Score contribution of the sleep balance (1-100).
-      - name: contributors_sleep_regularity
-        path: contributors.sleep_regularity
-        help: Score contribution of sleep regularity (1-100).
-      - name: temperature_deviation_celsius
-        path: temperature_deviation
-        help: Body temperature deviation from the baseline, in degrees Celsius.
-      - name: temperature_trend_deviation_celsius
-        path: temperature_trend_deviation
-        help: Body temperature trend deviation from the baseline, in degrees Celsius.
-
-  - name: daily_resilience
-    title: Resilience
-    summary: latest day
-    kind: daily
-    prefix: oura_daily_resilience_
-    metrics:
-      - name: contributors_sleep_recovery
-        path: contributors.sleep_recovery
-        help: Sleep recovery contribution to the resilience score (0-100).
-      - name: contributors_daytime_recovery
-        path: contributors.daytime_recovery
-        help: Daytime recovery contribution to the resilience score (0-100).
-      - name: contributors_stress
-        path: contributors.stress
-        help: Stress contribution to the resilience score (0-100).
-      - name: level
-        mapping:
-          limited: 1
-          adequate: 2
-          solid: 3
-          strong: 4
-          exceptional: 5
-        help: "Resilience level as a number: 1 limited, 2 adequate, 3 solid, 4 strong, 5 exceptional."
+      - name: total_sleep_duration_seconds
+        path: total_sleep_duration
+        help: Total sleep time, in seconds.
+      - name: deep_sleep_duration_seconds
+        path: deep_sleep_duration
+        help: Time spent in deep sleep, in seconds.
+      - name: rem_sleep_duration_seconds
+        path: rem_sleep_duration
+        help: Time spent in REM sleep, in seconds.
+      - name: light_sleep_duration_seconds
+        path: light_sleep_duration
+        help: Time spent in light sleep, in seconds.
+      - name: awake_time_seconds
+        path: awake_time
+        help: Time spent awake during the sleep period, in seconds.
+      - name: time_in_bed_seconds
+        path: time_in_bed
+        help: Time spent in bed, in seconds.
+      - name: efficiency_percent
+        path: efficiency
+        help: Sleep efficiency, in percent.
+      - name: latency_seconds
+        path: latency
+        help: Time it took to fall asleep, in seconds.
+      - name: average_hrv_milliseconds
+        path: average_hrv
+        help: Average heart rate variability during sleep, in milliseconds.
+      - name: lowest_heart_rate_bpm
+        path: lowest_heart_rate
+        help: Lowest heart rate during sleep, in beats per minute.
+      - name: average_heart_rate_bpm
+        path: average_heart_rate
+        help: Average heart rate during sleep, in beats per minute.
+      - name: average_breath
+        help: Average breathing rate during sleep, in breaths per minute.
+      - name: restless_periods
+        help: Restless periods during sleep.
+      - name: bedtime_start_timestamp_seconds
+        path: bedtime_start
+        transform: timestamp
+        help: Start of the sleep period, Unix time in seconds.
+      - name: bedtime_end_timestamp_seconds
+        path: bedtime_end
+        transform: timestamp
+        help: End of the sleep period, Unix time in seconds.
 
   - name: daily_sleep
     title: Sleep score
@@ -170,17 +84,135 @@ categories:
         path: contributors.total_sleep
         help: Score contribution of total sleep (1-100).
 
-  - name: daily_spo2
-    title: SpO2
-    summary: latest night
+  - name: daily_readiness
+    title: Readiness
+    summary: latest day
     kind: daily
-    prefix: oura_daily_spo2_
+    prefix: oura_daily_readiness_
     metrics:
-      - name: average_percent
-        path: spo2_percentage.average
-        help: Average blood oxygen saturation during sleep, in percent.
-      - name: breathing_disturbance_index
-        help: Breathing disturbance index from SpO2 drops (0-100).
+      - name: score
+        help: Readiness score (1-100).
+      - name: temperature_deviation_celsius
+        path: temperature_deviation
+        help: Body temperature deviation from the baseline, in degrees Celsius.
+      - name: temperature_trend_deviation_celsius
+        path: temperature_trend_deviation
+        help: Body temperature trend deviation from the baseline, in degrees Celsius.
+      - name: contributors_activity_balance
+        path: contributors.activity_balance
+        help: Score contribution of the cumulative activity balance (1-100).
+      - name: contributors_body_temperature
+        path: contributors.body_temperature
+        help: Score contribution of body temperature (1-100).
+      - name: contributors_hrv_balance
+        path: contributors.hrv_balance
+        help: Score contribution of heart rate variability balance (1-100).
+      - name: contributors_previous_day_activity
+        path: contributors.previous_day_activity
+        help: Score contribution of the previous day's activity (1-100).
+      - name: contributors_previous_night
+        path: contributors.previous_night
+        help: Score contribution of the previous night's sleep (1-100).
+      - name: contributors_recovery_index
+        path: contributors.recovery_index
+        help: Score contribution of the recovery index (1-100).
+      - name: contributors_resting_heart_rate
+        path: contributors.resting_heart_rate
+        help: Score contribution of the resting heart rate (1-100).
+      - name: contributors_sleep_balance
+        path: contributors.sleep_balance
+        help: Score contribution of the sleep balance (1-100).
+      - name: contributors_sleep_regularity
+        path: contributors.sleep_regularity
+        help: Score contribution of sleep regularity (1-100).
+
+  - name: daily_activity
+    title: Activity
+    summary: latest day
+    kind: daily
+    prefix: oura_daily_activity_
+    metrics:
+      - name: score
+        help: Activity score (1-100).
+      - name: steps
+        help: Steps taken.
+      - name: active_calories_kilocalories
+        path: active_calories
+        help: Active calories burned, in kilocalories.
+      - name: total_calories_kilocalories
+        path: total_calories
+        help: Total calories burned, in kilocalories.
+      - name: target_calories_kilocalories
+        path: target_calories
+        help: Daily activity calorie target, in kilocalories.
+      - name: equivalent_walking_distance_meters
+        path: equivalent_walking_distance
+        help: Walking distance equivalent to the energy expenditure of the day, in meters.
+      - name: target_meters
+        help: Daily activity target, in meters.
+      - name: meters_to_target
+        help: Meters remaining to the daily target.
+      - name: high_activity_time_seconds
+        path: high_activity_time
+        help: Time spent in high activity, in seconds.
+      - name: medium_activity_time_seconds
+        path: medium_activity_time
+        help: Time spent in medium activity, in seconds.
+      - name: low_activity_time_seconds
+        path: low_activity_time
+        help: Time spent in low activity, in seconds.
+      - name: sedentary_time_seconds
+        path: sedentary_time
+        help: Sedentary time, in seconds.
+      - name: resting_time_seconds
+        path: resting_time
+        help: Resting time, in seconds.
+      - name: non_wear_time_seconds
+        path: non_wear_time
+        help: Time the ring was not worn, in seconds.
+      - name: inactivity_alerts
+        help: Inactivity alerts received.
+      - name: average_met_minutes
+        help: Average MET (metabolic equivalent of task) minutes.
+      - name: high_activity_met_minutes
+        help: MET minutes spent in high activity.
+      - name: medium_activity_met_minutes
+        help: MET minutes spent in medium activity.
+      - name: low_activity_met_minutes
+        help: MET minutes spent in low activity.
+      - name: sedentary_met_minutes
+        help: MET minutes spent sedentary.
+      - name: contributors_meet_daily_targets
+        path: contributors.meet_daily_targets
+        help: Score contribution of meeting the daily activity targets of the previous 7 days (1-100).
+      - name: contributors_move_every_hour
+        path: contributors.move_every_hour
+        help: Score contribution of moving every hour, from inactivity alerts of the previous 24 hours (1-100).
+      - name: contributors_recovery_time
+        path: contributors.recovery_time
+        help: Score contribution of recovery time over the previous 7 days (1-100).
+      - name: contributors_stay_active
+        path: contributors.stay_active
+        help: Score contribution of staying active over the previous 24 hours (1-100).
+      - name: contributors_training_frequency
+        path: contributors.training_frequency
+        help: Score contribution of exercise frequency over the previous 7 days (1-100).
+      - name: contributors_training_volume
+        path: contributors.training_volume
+        help: Score contribution of exercise volume over the previous 7 days (1-100).
+
+  - name: heartrate
+    title: Heart rate
+    summary: most recent sample
+    kind: latest
+    prefix: oura_heartrate_
+    metrics:
+      - name: bpm
+        help: Most recent heart rate sample, in beats per minute.
+      - name: source
+        type: enum
+        states: [awake, rest, sleep, session, live, workout]
+        help: Source of the most recent heart rate sample.
 
   - name: daily_stress
     title: Stress
@@ -201,73 +233,41 @@ categories:
           stressful: 3
         help: "Daily stress summary as a number: 1 restored, 2 normal, 3 stressful."
 
-  - name: sleep
-    title: Sleep
-    summary: main sleep of the latest night
+  - name: daily_resilience
+    title: Resilience
+    summary: latest day
     kind: daily
-    prefix: oura_sleep_
-    select:
-      type: long_sleep
-    sort_by: bedtime_end
+    prefix: oura_daily_resilience_
     metrics:
-      - name: average_breath
-        help: Average breathing rate during sleep, in breaths per minute.
-      - name: average_heart_rate_bpm
-        path: average_heart_rate
-        help: Average heart rate during sleep, in beats per minute.
-      - name: lowest_heart_rate_bpm
-        path: lowest_heart_rate
-        help: Lowest heart rate during sleep, in beats per minute.
-      - name: average_hrv_milliseconds
-        path: average_hrv
-        help: Average heart rate variability during sleep, in milliseconds.
-      - name: awake_time_seconds
-        path: awake_time
-        help: Time spent awake during the sleep period, in seconds.
-      - name: deep_sleep_duration_seconds
-        path: deep_sleep_duration
-        help: Time spent in deep sleep, in seconds.
-      - name: light_sleep_duration_seconds
-        path: light_sleep_duration
-        help: Time spent in light sleep, in seconds.
-      - name: rem_sleep_duration_seconds
-        path: rem_sleep_duration
-        help: Time spent in REM sleep, in seconds.
-      - name: total_sleep_duration_seconds
-        path: total_sleep_duration
-        help: Total sleep time, in seconds.
-      - name: time_in_bed_seconds
-        path: time_in_bed
-        help: Time spent in bed, in seconds.
-      - name: efficiency_percent
-        path: efficiency
-        help: Sleep efficiency, in percent.
-      - name: latency_seconds
-        path: latency
-        help: Time it took to fall asleep, in seconds.
-      - name: restless_periods
-        help: Restless periods during sleep.
-      - name: bedtime_start_timestamp_seconds
-        path: bedtime_start
-        transform: timestamp
-        help: Start of the sleep period, Unix time in seconds.
-      - name: bedtime_end_timestamp_seconds
-        path: bedtime_end
-        transform: timestamp
-        help: End of the sleep period, Unix time in seconds.
+      - name: contributors_sleep_recovery
+        path: contributors.sleep_recovery
+        help: Sleep recovery contribution to the resilience score (0-100).
+      - name: contributors_daytime_recovery
+        path: contributors.daytime_recovery
+        help: Daytime recovery contribution to the resilience score (0-100).
+      - name: contributors_stress
+        path: contributors.stress
+        help: Stress contribution to the resilience score (0-100).
+      - name: level
+        mapping:
+          limited: 1
+          adequate: 2
+          solid: 3
+          strong: 4
+          exceptional: 5
+        help: "Resilience level as a number: 1 limited, 2 adequate, 3 solid, 4 strong, 5 exceptional."
 
-  - name: heartrate
-    title: Heart rate
-    summary: most recent sample
-    kind: latest
-    prefix: oura_heartrate_
+  - name: daily_spo2
+    title: SpO2
+    summary: latest night
+    kind: daily
+    prefix: oura_daily_spo2_
     metrics:
-      - name: bpm
-        help: Most recent heart rate sample, in beats per minute.
-      - name: source
-        type: enum
-        states: [awake, rest, sleep, session, live, workout]
-        help: Source of the most recent heart rate sample.
+      - name: average_percent
+        path: spo2_percentage.average
+        help: Average blood oxygen saturation during sleep, in percent.
+      - name: breathing_disturbance_index
+        help: Breathing disturbance index from SpO2 drops (0-100).
 
   - name: ring_battery_level
     title: Ring battery

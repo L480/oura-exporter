@@ -46,6 +46,9 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
 - A category also takes optional `title` and `summary` keys for the README list. The
   defaults are the name with spaces, and `latest day`, `most recent sample` or `profile`
   depending on its kind.
+- The order in the file is the order of the README list and of the exposition: headline
+  values first. `contributors_*` metrics are listed on a line of their own, without the
+  prefix.
 - Add the field to the matching file in `tests/fixtures` (and its `_nulls` variant), then
   regenerate the golden files.
 

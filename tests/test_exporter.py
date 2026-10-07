@@ -16,6 +16,7 @@ from oura_exporter.exporter import Exporter, OuraCollector
 from oura_exporter.storage import Token
 
 from .helpers import (
+    CATEGORY_ORDER,
     ENDPOINTS,
     TODAY,
     TOKEN_URL,
@@ -253,20 +254,19 @@ class TestScheduling:
         assert rig.errors("daily_sleep", "forbidden") == 2
 
     def test_rate_limit_pauses_everything_and_ends_the_cycle(self, rig: Rig) -> None:
-        rig.rsps.replace(
-            responses.GET, api_url("daily_activity"), status=429, headers={"Retry-After": "120"}
-        )
+        first, second = CATEGORY_ORDER[:2]
+        rig.rsps.replace(responses.GET, api_url(first), status=429, headers={"Retry-After": "120"})
         rig.exporter.poll()
         assert len(rig.rsps.calls) == 1
-        assert rig.up("daily_activity") == 0
-        assert rig.errors("daily_activity", "rate_limited") == 1
-        assert rig.up("daily_readiness") == 0
+        assert rig.up(first) == 0
+        assert rig.errors(first, "rate_limited") == 1
+        assert rig.up(second) == 0
 
         rig.advance(60)
         rig.exporter.poll()
         assert len(rig.rsps.calls) == 1
 
-        register_endpoint(rig.rsps, "daily_activity", replace=True)
+        register_endpoint(rig.rsps, first, replace=True)
         rig.advance(61)
         rig.exporter.poll()
         assert len(rig.rsps.calls) == 1 + 10
@@ -289,26 +289,27 @@ class TestScheduling:
         rig.exporter._fetch = fetch_then_stop  # type: ignore[method-assign]
         rig.exporter.poll(stop)
         assert len(rig.rsps.calls) == 1
-        assert rig.up("daily_readiness") is None
+        assert rig.up(CATEGORY_ORDER[1]) is None
 
 
 class TestFailureIsolation:
     def test_one_broken_category_does_not_stop_the_others(self, rig: Rig) -> None:
-        rig.rsps.replace(responses.GET, api_url("daily_readiness"), body="<html>oops</html>")
+        broken = "daily_readiness"
+        rig.rsps.replace(responses.GET, api_url(broken), body="<html>oops</html>")
         rig.exporter.poll()
-        assert rig.up("daily_readiness") == 0
-        assert rig.errors("daily_readiness", "invalid_response") == 1
-        assert rig.up("daily_activity") == 1
-        assert rig.up("personal_info") == 1
+        assert rig.up(broken) == 0
+        assert rig.errors(broken, "invalid_response") == 1
+        assert CATEGORY_ORDER.index(broken) < len(CATEGORY_ORDER) - 1
+        assert all(rig.up(category) == 1 for category in CATEGORY_ORDER if category != broken)
         assert len(rig.rsps.calls) == 10
 
     def test_network_errors_do_not_stop_the_other_categories(self, rig: Rig) -> None:
-        rig.rsps.replace(
-            responses.GET, api_url("daily_activity"), body=requests.ConnectionError("down")
-        )
+        failing = "daily_activity"
+        rig.rsps.replace(responses.GET, api_url(failing), body=requests.ConnectionError("down"))
         rig.exporter.poll()
-        assert rig.errors("daily_activity", "network") == 1
-        assert rig.up("daily_sleep") == 1
+        assert rig.errors(failing, "network") == 1
+        assert CATEGORY_ORDER.index(failing) < len(CATEGORY_ORDER) - 1
+        assert all(rig.up(category) == 1 for category in CATEGORY_ORDER if category != failing)
 
     def test_unexpected_exceptions_are_logged_once_and_isolated(
         self,
@@ -318,8 +319,10 @@ class TestFailureIsolation:
     ) -> None:
         real = exporter_module.build_snapshot
 
+        failing = "daily_stress"
+
         def explode(category: Any, documents: Any, warned: Any = None) -> Any:
-            if category.name == "daily_stress":
+            if category.name == failing:
                 raise RuntimeError("bug")
             return real(category, documents, warned)
 
@@ -329,10 +332,10 @@ class TestFailureIsolation:
             rig.advance(300)
             rig.exporter.poll()
 
-        assert rig.errors("daily_stress", "internal") == 2
-        assert rig.up("daily_stress") == 0
-        assert rig.up("sleep") == 1
-        assert rig.up("personal_info") == 1
+        assert rig.errors(failing, "internal") == 2
+        assert rig.up(failing) == 0
+        assert CATEGORY_ORDER.index(failing) < len(CATEGORY_ORDER) - 1
+        assert all(rig.up(category) == 1 for category in CATEGORY_ORDER if category != failing)
         errors = poll_records(caplog, logging.ERROR)
         assert len(errors) == 1
         assert errors[0].exc_info is not None
@@ -340,6 +343,7 @@ class TestFailureIsolation:
         assert len(poll_records(caplog, logging.WARNING)) == 0
 
     def test_authentication_failure_ends_the_cycle(self, rig: Rig) -> None:
+        first, second = CATEGORY_ORDER[:2]
         assert rig.tokens.token is not None
         rig.tokens.token = Token(
             "old", "refresh-1", datetime.fromtimestamp(WALL - 5, tz=UTC), "cid"
@@ -347,16 +351,16 @@ class TestFailureIsolation:
         rig.rsps.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
-        assert rig.errors("daily_activity", "auth") == 1
-        assert rig.up("daily_activity") == 0
-        assert rig.up("daily_readiness") == 0
-        assert error_reasons(rig, "daily_readiness") == set()
-        assert len(rig.calls("daily_activity")) == 0
+        assert rig.errors(first, "auth") == 1
+        assert rig.up(first) == 0
+        assert rig.up(second) == 0
+        assert error_reasons(rig, second) == set()
+        assert len(rig.calls(first)) == 0
 
         rig.advance(300)
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
-        assert rig.errors("daily_activity", "auth") == 2
+        assert rig.errors(first, "auth") == 2
         assert len(rig.rsps.calls) == 1
 
         rig.advance(3600)
@@ -370,23 +374,24 @@ class TestFailureIsolation:
         assert all(rig.up(category) == 1 for category in CATEGORIES)
 
     def test_rejected_access_token_ends_the_cycle(self, rig: Rig) -> None:
-        rig.rsps.replace(responses.GET, api_url("daily_activity"), status=401)
+        first, second = CATEGORY_ORDER[:2]
+        rig.rsps.replace(responses.GET, api_url(first), status=401)
         rig.rsps.post(
             TOKEN_URL,
             json={"access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600},
         )
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
-        assert rig.errors("daily_activity", "auth") == 1
-        assert rig.up("daily_readiness") == 0
-        assert len(rig.calls("daily_activity")) == 2
+        assert rig.errors(first, "auth") == 1
+        assert rig.up(second) == 0
+        assert len(rig.calls(first)) == 2
 
         rig.advance(300)
         rig.exporter.poll()
-        assert len(rig.calls("daily_activity")) == 3
+        assert len(rig.calls(first)) == 3
         assert len(rig.rsps.calls) == 1 + 2 + 1
 
-        register_endpoint(rig.rsps, "daily_activity", replace=True)
+        register_endpoint(rig.rsps, first, replace=True)
         rig.advance(300)
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 1
@@ -404,46 +409,43 @@ class TestAbortedCycles:
     def test_a_rate_limit_marks_every_due_category_down_quietly(
         self, rig: Rig, caplog: pytest.LogCaptureFixture
     ) -> None:
-        self.limit(rig, "daily_activity")
+        first = CATEGORY_ORDER[0]
+        self.limit(rig, first)
         with caplog.at_level(logging.DEBUG, logger="oura_exporter.exporter"):
             rig.exporter.poll()
         assert {category: rig.up(category) for category in CATEGORIES} == dict.fromkeys(
             CATEGORIES, 0
         )
-        assert error_reasons(rig, "daily_activity") == {"rate_limited"}
-        for category in CATEGORIES[1:]:
+        assert error_reasons(rig, first) == {"rate_limited"}
+        for category in CATEGORY_ORDER[1:]:
             assert error_reasons(rig, category) == set()
-            assert not any(category in record.getMessage() for record in caplog.records)
+            assert not any(
+                record.getMessage().startswith(f"{category}:") for record in caplog.records
+            )
         assert len(poll_records(caplog, logging.WARNING)) == 1
         assert poll_records(caplog, logging.INFO) == []
 
     def test_a_rate_limit_mid_cycle_leaves_categories_that_are_not_due_alone(
         self, rig: Rig
     ) -> None:
+        fetched, limited, rest = CATEGORY_ORDER[:2], CATEGORY_ORDER[2], CATEGORY_ORDER[3:]
+        assert "personal_info" in rest
         rig.exporter.poll()
         rig.advance(300)
-        self.limit(rig, "daily_resilience")
+        self.limit(rig, limited)
         rig.exporter.poll()
-        assert {category: rig.up(category) for category in CATEGORIES} == {
-            "daily_activity": 1,
-            "daily_readiness": 1,
-            "daily_resilience": 0,
-            "daily_sleep": 0,
-            "daily_spo2": 0,
-            "daily_stress": 0,
-            "sleep": 0,
-            "heartrate": 0,
-            "ring_battery_level": 0,
-            "personal_info": 1,
-        }
-        assert error_reasons(rig, "daily_resilience") == {"rate_limited"}
-        assert error_reasons(rig, "daily_sleep") == set()
+        expected = dict.fromkeys(fetched, 1) | {limited: 0}
+        expected |= {category: 1 if category == "personal_info" else 0 for category in rest}
+        assert {category: rig.up(category) for category in CATEGORIES} == expected
+        assert error_reasons(rig, limited) == {"rate_limited"}
+        assert error_reasons(rig, rest[0]) == set()
         assert rig.value("oura_daily_sleep_score") == 84
 
     def test_a_later_success_sets_every_category_up_again(self, rig: Rig) -> None:
-        self.limit(rig, "daily_activity")
+        first = CATEGORY_ORDER[0]
+        self.limit(rig, first)
         rig.exporter.poll()
-        register_endpoint(rig.rsps, "daily_activity", replace=True)
+        register_endpoint(rig.rsps, first, replace=True)
         rig.advance(121)
         rig.exporter.poll()
         assert all(rig.up(category) == 1 for category in CATEGORIES)
@@ -451,7 +453,7 @@ class TestAbortedCycles:
     def test_categories_that_become_due_during_a_pause_are_marked_down(self, rig: Rig) -> None:
         rig.exporter.poll()
         rig.advance(3300)
-        self.limit(rig, "daily_activity", retry_after=3600)
+        self.limit(rig, CATEGORY_ORDER[0], retry_after=3600)
         rig.exporter.poll()
         assert rig.up("personal_info") == 1
 
@@ -463,29 +465,22 @@ class TestAbortedCycles:
         assert error_reasons(rig, "personal_info") == set()
 
     def test_an_authentication_failure_marks_the_rest_of_the_cycle_down(self, rig: Rig) -> None:
+        fetched, failing, rest = CATEGORY_ORDER[:1], CATEGORY_ORDER[1], CATEGORY_ORDER[2:]
+        assert "personal_info" in rest
         rig.exporter.poll()
         rig.advance(300)
-        rig.rsps.replace(responses.GET, api_url("daily_readiness"), status=401)
+        rig.rsps.replace(responses.GET, api_url(failing), status=401)
         rig.rsps.post(
             TOKEN_URL,
             json={"access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600},
         )
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
-        assert {category: rig.up(category) for category in CATEGORIES} == {
-            "daily_activity": 1,
-            "daily_readiness": 0,
-            "daily_resilience": 0,
-            "daily_sleep": 0,
-            "daily_spo2": 0,
-            "daily_stress": 0,
-            "sleep": 0,
-            "heartrate": 0,
-            "ring_battery_level": 0,
-            "personal_info": 1,
-        }
-        assert error_reasons(rig, "daily_readiness") == {"auth"}
-        assert error_reasons(rig, "daily_resilience") == set()
+        expected = dict.fromkeys(fetched, 1) | {failing: 0}
+        expected |= {category: 1 if category == "personal_info" else 0 for category in rest}
+        assert {category: rig.up(category) for category in CATEGORIES} == expected
+        assert error_reasons(rig, failing) == {"auth"}
+        assert error_reasons(rig, rest[0]) == set()
 
 
 class TestStandardMetrics:

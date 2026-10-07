@@ -24,14 +24,14 @@ from .helpers import TODAY, epoch, load_fixture
 
 NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 CATEGORY_NAMES = [
-    "daily_activity",
-    "daily_readiness",
-    "daily_resilience",
-    "daily_sleep",
-    "daily_spo2",
-    "daily_stress",
     "sleep",
+    "daily_sleep",
+    "daily_readiness",
+    "daily_activity",
     "heartrate",
+    "daily_stress",
+    "daily_resilience",
+    "daily_spo2",
     "ring_battery_level",
     "personal_info",
 ]
@@ -68,16 +68,110 @@ def by_name(name: str) -> Category:
 
 
 class TestPackagedDefinitions:
-    def test_categories_and_kinds(self) -> None:
-        categories = load_definitions()
-        assert [category.name for category in categories] == CATEGORY_NAMES
-        kinds = {category.name: category.kind for category in categories}
-        assert {name: kinds[name] for name in ("heartrate", "ring_battery_level")} == {
+    def test_categories_are_ordered_by_interest(self) -> None:
+        assert [category.name for category in load_definitions()] == CATEGORY_NAMES
+
+    def test_kinds(self) -> None:
+        assert {category.name: category.kind for category in load_definitions()} == {
+            "sleep": "daily",
+            "daily_sleep": "daily",
+            "daily_readiness": "daily",
+            "daily_activity": "daily",
             "heartrate": "latest",
+            "daily_stress": "daily",
+            "daily_resilience": "daily",
+            "daily_spo2": "daily",
             "ring_battery_level": "latest",
+            "personal_info": "single",
         }
-        assert kinds["personal_info"] == "single"
-        assert all(kinds[name] == "daily" for name in CATEGORY_NAMES[:7])
+
+    @pytest.mark.parametrize(
+        ("name", "headline"),
+        [
+            (
+                "sleep",
+                [
+                    "total_sleep_duration_seconds",
+                    "deep_sleep_duration_seconds",
+                    "rem_sleep_duration_seconds",
+                    "light_sleep_duration_seconds",
+                    "awake_time_seconds",
+                    "time_in_bed_seconds",
+                    "efficiency_percent",
+                    "latency_seconds",
+                    "average_hrv_milliseconds",
+                    "lowest_heart_rate_bpm",
+                    "average_heart_rate_bpm",
+                    "average_breath",
+                    "restless_periods",
+                    "bedtime_start_timestamp_seconds",
+                    "bedtime_end_timestamp_seconds",
+                ],
+            ),
+            (
+                "daily_activity",
+                [
+                    "score",
+                    "steps",
+                    "active_calories_kilocalories",
+                    "total_calories_kilocalories",
+                    "target_calories_kilocalories",
+                    "equivalent_walking_distance_meters",
+                    "target_meters",
+                    "meters_to_target",
+                    "high_activity_time_seconds",
+                    "medium_activity_time_seconds",
+                    "low_activity_time_seconds",
+                    "sedentary_time_seconds",
+                    "resting_time_seconds",
+                    "non_wear_time_seconds",
+                    "inactivity_alerts",
+                    "average_met_minutes",
+                    "high_activity_met_minutes",
+                    "medium_activity_met_minutes",
+                    "low_activity_met_minutes",
+                    "sedentary_met_minutes",
+                ],
+            ),
+            (
+                "daily_readiness",
+                [
+                    "score",
+                    "temperature_deviation_celsius",
+                    "temperature_trend_deviation_celsius",
+                ],
+            ),
+        ],
+    )
+    def test_headline_values_come_first_and_contributors_last(
+        self, name: str, headline: list[str]
+    ) -> None:
+        names = [metric.name for metric in by_name(name).metrics]
+        assert names[: len(headline)] == headline
+        assert all(rest.startswith("contributors_") for rest in names[len(headline) :])
+
+    def test_contributors_keep_their_order(self) -> None:
+        readiness = [metric.name for metric in by_name("daily_readiness").metrics][3:]
+        assert readiness == [
+            "contributors_activity_balance",
+            "contributors_body_temperature",
+            "contributors_hrv_balance",
+            "contributors_previous_day_activity",
+            "contributors_previous_night",
+            "contributors_recovery_index",
+            "contributors_resting_heart_rate",
+            "contributors_sleep_balance",
+            "contributors_sleep_regularity",
+        ]
+        activity = [metric.name for metric in by_name("daily_activity").metrics][20:]
+        assert activity == [
+            "contributors_meet_daily_targets",
+            "contributors_move_every_hour",
+            "contributors_recovery_time",
+            "contributors_stay_active",
+            "contributors_training_frequency",
+            "contributors_training_volume",
+        ]
 
     def test_every_exposed_name_is_unique_and_valid(self) -> None:
         exposed: list[str] = []

@@ -44,6 +44,7 @@ CATEGORY_KEYS = frozenset(
     }
 )
 DEFAULT_SUMMARIES = {"daily": "latest day", "latest": "most recent sample", "single": "profile"}
+CONTRIBUTOR_PREFIX = "contributors_"
 METRIC_KEYS = frozenset({"name", "help", "path", "type", "mapping", "states", "transform"})
 
 
@@ -454,9 +455,23 @@ def _metric_label(metric: Metric) -> str:
 def render_metric_list(categories: Iterable[Category]) -> str:
     lines: list[str] = []
     for category in categories:
-        names = [_metric_label(metric) for metric in category.metrics]
+        names: list[str] = []
+        contributors: list[str] = []
+        for metric in category.metrics:
+            label = _metric_label(metric)
+            if metric.name.startswith(CONTRIBUTOR_PREFIX):
+                contributors.append(label.removeprefix(CONTRIBUTOR_PREFIX))
+            else:
+                names.append(label)
         if category.timestamp_name is not None:
             names.append("timestamp_seconds")
         lines.append(f"- **{category.title}** · `{category.prefix}*` · {category.summary}<br>")
-        lines.append("  " + ", ".join(f"`{name}`" for name in names))
+        if names:
+            lines.append("  " + _code_list(names) + ("<br>" if contributors else ""))
+        if contributors:
+            lines.append(f"  contributors (`{CONTRIBUTOR_PREFIX}*`): " + _code_list(contributors))
     return "\n".join(lines)
+
+
+def _code_list(names: Iterable[str]) -> str:
+    return ", ".join(f"`{name}`" for name in names)
