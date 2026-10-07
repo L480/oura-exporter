@@ -25,7 +25,8 @@ The deployment, not just the code, is part of the security surface:
   it. If it leaks, revoke the application's access in the Oura account settings; a new
   authorization then issues a new token.
 - **Prefer `OURA_CLIENT_SECRET_FILE`** over `OURA_CLIENT_SECRET`. Environment variables are
-  visible through `docker inspect` and process listings, a mounted file is not.
+  visible through `docker inspect` and to anyone who can read the process environment, a
+  mounted file is not.
 - **Logs never contain tokens, refresh tokens or the client secret.** The authorization URL in
   the logs is not secret: it carries only the client ID, the PKCE challenge and a random
   `state`. An authorization code is single-use and useless without the verifier kept in the

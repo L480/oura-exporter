@@ -131,6 +131,53 @@ class TestPackagedDefinitions:
             assert not missing, (category.name, missing)
 
 
+class TestTitleAndSummary:
+    @pytest.mark.parametrize(
+        ("name", "kind", "title", "summary"),
+        [
+            ("alpha", "daily", "Alpha", "latest day"),
+            ("daily_sleep", "daily", "Daily sleep", "latest day"),
+            ("ring_battery_level", "latest", "Ring battery level", "most recent sample"),
+            ("personal_info", "single", "Personal info", "profile"),
+        ],
+    )
+    def test_defaults(self, name: str, kind: str, title: str, summary: str) -> None:
+        raw = {
+            "name": name,
+            "kind": kind,
+            "prefix": "oura_x_",
+            "metrics": [{"name": "v", "help": "Value."}],
+        }
+        parsed = parse_definitions({"categories": [raw]}, "test")[0]
+        assert parsed.title == title
+        assert parsed.summary == summary
+
+    def test_explicit_values_win(self) -> None:
+        parsed = make_category(title="Custom title", summary="every full moon")
+        assert parsed.title == "Custom title"
+        assert parsed.summary == "every full moon"
+
+    @pytest.mark.parametrize(
+        ("name", "title", "summary"),
+        [
+            ("daily_activity", "Activity", "latest day"),
+            ("daily_readiness", "Readiness", "latest day"),
+            ("daily_resilience", "Resilience", "latest day"),
+            ("daily_sleep", "Sleep score", "latest day"),
+            ("daily_spo2", "SpO2", "latest night"),
+            ("daily_stress", "Stress", "latest day"),
+            ("sleep", "Sleep", "main sleep of the latest night"),
+            ("heartrate", "Heart rate", "most recent sample"),
+            ("ring_battery_level", "Ring battery", "most recent sample"),
+            ("personal_info", "Profile", "refreshed hourly"),
+        ],
+    )
+    def test_packaged_categories(self, name: str, title: str, summary: str) -> None:
+        packaged = by_name(name)
+        assert packaged.title == title
+        assert packaged.summary == summary
+
+
 class TestRequestParameters:
     def test_daily(self) -> None:
         params = by_name("daily_resilience").params(TODAY)
@@ -420,6 +467,11 @@ class TestValidation:
             (lambda d: d.update(categories=[]), "'categories' must be a non-empty list"),
             (lambda d: d.update(categories="x"), "'categories' must be a non-empty list"),
             (lambda d: d["categories"][0].update(foo=1), "unknown key.*foo"),
+            (lambda d: d["categories"][0].update(title=""), "'title' must be a non-empty string"),
+            (lambda d: d["categories"][0].update(title="  "), "'title' must be a non-empty string"),
+            (lambda d: d["categories"][0].update(title=5), "'title' must be a non-empty string"),
+            (lambda d: d["categories"][0].update(summary=""), "'summary' must be a non-empty"),
+            (lambda d: d["categories"][0].update(summary=["x"]), "'summary' must be a non-empty"),
             (lambda d: d["categories"].__setitem__(0, "text"), "expected a mapping"),
             (lambda d: d["categories"][0].pop("name"), "'name' must be a non-empty string"),
             (lambda d: d["categories"][0].update(name="1abc"), "'name' must match"),

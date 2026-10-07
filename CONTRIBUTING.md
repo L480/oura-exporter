@@ -20,17 +20,21 @@ uv run pytest
 ```
 
 All four must pass; `pytest` also enforces a coverage floor of 85 %. CI runs the same checks
-plus `hadolint`, a Trivy scan and a Docker build with a smoke test.
+plus `hadolint`, Trivy scans of the repository and of the built image, and a Docker build
+with a smoke test.
 
-## Golden file
+## Golden files
 
-`example/oura.prom` is the exposition produced from the fixtures in `tests/fixtures`, and a
-test compares against it. After changing `metrics.yml` or the fixtures, regenerate it and
-review the diff:
+`example/oura.prom` is the exposition produced from the fixtures in `tests/fixtures`, and the
+metric list in `README.md` is rendered from `metrics.yml`. Tests compare against both. After
+changing `metrics.yml` or the fixtures, regenerate them and review the diff:
 
 ```bash
-UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py --no-cov
+UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py tests/test_readme.py --no-cov
 ```
+
+`UPDATE_GOLDEN=1` also rewrites the README metric list, but only the block between the
+`BEGIN METRICS` and `END METRICS` markers.
 
 ## Adding a metric
 
@@ -39,8 +43,11 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
 - Name with the unit as a suffix (`_seconds`, `_percent`, `_celsius`, ...); scores are unitless.
 - `path` is the dotted path into the Oura document, it defaults to the name.
 - A missing or `null` value must mean "no series", never `0`.
+- A category also takes optional `title` and `summary` keys for the README list. The
+  defaults are the name with spaces, and `latest day`, `most recent sample` or `profile`
+  depending on its kind.
 - Add the field to the matching file in `tests/fixtures` (and its `_nulls` variant), then
-  regenerate the golden file.
+  regenerate the golden files.
 
 ## Invariants a PR must not break
 

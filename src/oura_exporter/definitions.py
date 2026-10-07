@@ -30,8 +30,20 @@ type Scalar = str | int | float | bool
 METRIC_TYPES = ("gauge", "enum", "info")
 KINDS = ("daily", "latest", "single")
 CATEGORY_KEYS = frozenset(
-    {"name", "endpoint", "kind", "prefix", "refresh_interval", "select", "sort_by", "metrics"}
+    {
+        "name",
+        "title",
+        "summary",
+        "endpoint",
+        "kind",
+        "prefix",
+        "refresh_interval",
+        "select",
+        "sort_by",
+        "metrics",
+    }
 )
+DEFAULT_SUMMARIES = {"daily": "latest day", "latest": "most recent sample", "single": "profile"}
 METRIC_KEYS = frozenset({"name", "help", "path", "type", "mapping", "states", "transform"})
 
 
@@ -67,6 +79,8 @@ class Category:
     refresh_interval: int | None = None
     select: Mapping[str, Scalar] = field(default_factory=dict)
     sort_by: str | None = None
+    title: str = ""
+    summary: str = ""
 
     @property
     def timestamp_name(self) -> str | None:
@@ -332,6 +346,9 @@ def _parse_category(raw: object, where: str) -> Category:
     if not ENDPOINT_PATTERN.match(endpoint):
         raise ConfigError(f"{where}: 'endpoint' must match {ENDPOINT_PATTERN.pattern}")
     prefix = _identifier(data, "prefix", where)
+    default_title = name.replace("_", " ")
+    title = _string(data, "title", where, default=default_title[:1].upper() + default_title[1:])
+    summary = _string(data, "summary", where, default=DEFAULT_SUMMARIES[kind])
 
     refresh_interval = data.get("refresh_interval")
     if refresh_interval is not None and not _is_positive_int(refresh_interval):
@@ -365,6 +382,8 @@ def _parse_category(raw: object, where: str) -> Category:
         refresh_interval=refresh_interval,
         select=select,
         sort_by=sort_by,
+        title=title,
+        summary=summary,
     )
 
 
@@ -420,3 +439,24 @@ def load_definitions(path: Path | None = None) -> tuple[Category, ...]:
     except yaml.YAMLError as exc:
         raise ConfigError(f"{source}: invalid YAML: {exc}") from exc
     return parse_definitions(data, source)
+
+
+def _metric_label(metric: Metric) -> str:
+    if metric.type == "info":
+        return f"{metric.name}_info"
+    if metric.type == "enum":
+        return f"{metric.name} (state set)"
+    if metric.mapping:
+        return f"{metric.name} ({min(metric.mapping.values()):g}-{max(metric.mapping.values()):g})"
+    return metric.name
+
+
+def render_metric_list(categories: Iterable[Category]) -> str:
+    lines: list[str] = []
+    for category in categories:
+        names = [_metric_label(metric) for metric in category.metrics]
+        if category.timestamp_name is not None:
+            names.append("timestamp_seconds")
+        lines.append(f"- **{category.title}** · `{category.prefix}*` · {category.summary}<br>")
+        lines.append("  " + ", ".join(f"`{name}`" for name in names))
+    return "\n".join(lines)

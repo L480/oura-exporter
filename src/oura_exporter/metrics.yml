@@ -1,5 +1,7 @@
 categories:
   - name: daily_activity
+    title: Activity
+    summary: latest day
     kind: daily
     prefix: oura_daily_activity_
     metrics:
@@ -73,6 +75,8 @@ categories:
         help: Total calories burned, in kilocalories.
 
   - name: daily_readiness
+    title: Readiness
+    summary: latest day
     kind: daily
     prefix: oura_daily_readiness_
     metrics:
@@ -113,6 +117,8 @@ categories:
         help: Body temperature trend deviation from the baseline, in degrees Celsius.
 
   - name: daily_resilience
+    title: Resilience
+    summary: latest day
     kind: daily
     prefix: oura_daily_resilience_
     metrics:
@@ -135,6 +141,8 @@ categories:
         help: "Resilience level as a number: 1 limited, 2 adequate, 3 solid, 4 strong, 5 exceptional."
 
   - name: daily_sleep
+    title: Sleep score
+    summary: latest day
     kind: daily
     prefix: oura_daily_sleep_
     metrics:
@@ -163,6 +171,8 @@ categories:
         help: Score contribution of total sleep (1-100).
 
   - name: daily_spo2
+    title: SpO2
+    summary: latest night
     kind: daily
     prefix: oura_daily_spo2_
     metrics:
@@ -173,6 +183,8 @@ categories:
         help: Breathing disturbance index from SpO2 drops (0-100).
 
   - name: daily_stress
+    title: Stress
+    summary: latest day
     kind: daily
     prefix: oura_daily_stress_
     metrics:
@@ -190,6 +202,8 @@ categories:
         help: "Daily stress summary as a number: 1 restored, 2 normal, 3 stressful."
 
   - name: sleep
+    title: Sleep
+    summary: main sleep of the latest night
     kind: daily
     prefix: oura_sleep_
     select:
@@ -243,6 +257,8 @@ categories:
         help: End of the sleep period, Unix time in seconds.
 
   - name: heartrate
+    title: Heart rate
+    summary: most recent sample
     kind: latest
     prefix: oura_heartrate_
     metrics:
@@ -254,6 +270,8 @@ categories:
         help: Source of the most recent heart rate sample.
 
   - name: ring_battery_level
+    title: Ring battery
+    summary: most recent sample
     kind: latest
     prefix: oura_ring_battery_
     metrics:
@@ -266,6 +284,8 @@ categories:
         help: 1 if the ring was in its charger at the most recent sample.
 
   - name: personal_info
+    title: Profile
+    summary: refreshed hourly
     kind: single
     refresh_interval: 3600
     prefix: oura_personal_info_
