@@ -1,12 +1,13 @@
 categories:
   - name: sleep
     title: Sleep
-    summary: main sleep of the latest night
-    kind: daily
+    summary: every sleep period, stamped with its end
+    kind: event
     prefix: oura_sleep_
-    select:
-      type: long_sleep
-    sort_by: bedtime_end
+    time_path: bedtime_end
+    labels:
+      - name: sleep_type
+        path: type
     metrics:
       - name: total_sleep_duration_seconds
         path: total_sleep_duration
@@ -45,18 +46,96 @@ categories:
         help: Average breathing rate during sleep, in breaths per minute.
       - name: restless_periods
         help: Restless periods during sleep.
-      - name: bedtime_start_timestamp_seconds
-        path: bedtime_start
-        transform: timestamp
-        help: Start of the sleep period, Unix time in seconds.
-      - name: bedtime_end_timestamp_seconds
-        path: bedtime_end
-        transform: timestamp
-        help: End of the sleep period, Unix time in seconds.
+      - name: low_battery_alert
+        help: 1 if a low battery alert occurred during the sleep period.
+      - name: readiness_score_delta
+        help: Effect of the sleep period on the readiness score.
+      - name: sleep_score_delta
+        help: Effect of the sleep period on the sleep score.
+      - name: sleep_algorithm_version
+        mapping:
+          v1: 1
+          v2: 2
+        help: "Version of the sleep algorithm as a number: 1 v1, 2 v2."
+      - name: sleep_analysis_reason
+        mapping:
+          foreground_sleep_analysis: 1
+          bedtime_edit: 2
+          background_sleep_analysis: 3
+          background_created_foreground_updated: 4
+        help: "Reason for the latest version of the sleep as a number: 1 foreground_sleep_analysis, 2 bedtime_edit, 3 background_sleep_analysis, 4 background_created_foreground_updated."
+      - name: readiness_score
+        path: readiness.score
+        help: Readiness score of the sleep period (1-100).
+      - name: readiness_temperature_deviation_celsius
+        path: readiness.temperature_deviation
+        help: Body temperature deviation of the sleep period, in degrees Celsius.
+      - name: readiness_temperature_trend_deviation_celsius
+        path: readiness.temperature_trend_deviation
+        help: Body temperature trend deviation of the sleep period, in degrees Celsius.
+      - name: readiness_contributors_activity_balance
+        path: readiness.contributors.activity_balance
+        help: Readiness contribution of the cumulative activity balance (1-100).
+      - name: readiness_contributors_body_temperature
+        path: readiness.contributors.body_temperature
+        help: Readiness contribution of body temperature (1-100).
+      - name: readiness_contributors_hrv_balance
+        path: readiness.contributors.hrv_balance
+        help: Readiness contribution of heart rate variability balance (1-100).
+      - name: readiness_contributors_previous_day_activity
+        path: readiness.contributors.previous_day_activity
+        help: Readiness contribution of the previous day's activity (1-100).
+      - name: readiness_contributors_previous_night
+        path: readiness.contributors.previous_night
+        help: Readiness contribution of the previous night's sleep (1-100).
+      - name: readiness_contributors_recovery_index
+        path: readiness.contributors.recovery_index
+        help: Readiness contribution of the recovery index (1-100).
+      - name: readiness_contributors_resting_heart_rate
+        path: readiness.contributors.resting_heart_rate
+        help: Readiness contribution of the resting heart rate (1-100).
+      - name: readiness_contributors_sleep_balance
+        path: readiness.contributors.sleep_balance
+        help: Readiness contribution of the sleep balance (1-100).
+      - name: readiness_contributors_sleep_regularity
+        path: readiness.contributors.sleep_regularity
+        help: Readiness contribution of sleep regularity (1-100).
+    series:
+      - name: heart_rate_bpm
+        path: heart_rate
+        type: samples
+        help: Heart rate during sleep, one sample per 5 minutes, in beats per minute.
+      - name: hrv_milliseconds
+        path: hrv
+        type: samples
+        help: Heart rate variability during sleep, one sample per 5 minutes, in milliseconds.
+      - name: phase_5_min
+        path: sleep_phase_5_min
+        type: string
+        interval: 300
+        start: bedtime_start
+        help: "Sleep phase per 5 minutes: 1 deep, 2 light, 3 REM, 4 awake."
+      - name: phase_30_sec
+        path: sleep_phase_30_sec
+        type: string
+        interval: 30
+        start: bedtime_start
+        help: "Sleep phase per 30 seconds: 1 deep, 2 light, 3 REM, 4 awake."
+      - name: app_phase_5_min
+        path: app_sleep_phase_5_min
+        type: string
+        interval: 300
+        start: bedtime_start
+        help: "Sleep phase per 5 minutes as shown in the Oura app: 1 deep, 2 light, 3 REM, 4 awake."
+      - name: movement_30_sec
+        path: movement_30_sec
+        type: string
+        interval: 30
+        start: bedtime_start
+        help: "Movement per 30 seconds: 1 no motion, 2 restless, 3 tossing and turning, 4 active."
 
   - name: daily_sleep
     title: Sleep score
-    summary: latest day
     kind: daily
     prefix: oura_daily_sleep_
     metrics:
@@ -86,7 +165,6 @@ categories:
 
   - name: daily_readiness
     title: Readiness
-    summary: latest day
     kind: daily
     prefix: oura_daily_readiness_
     metrics:
@@ -128,7 +206,6 @@ categories:
 
   - name: daily_activity
     title: Activity
-    summary: latest day
     kind: daily
     prefix: oura_daily_activity_
     metrics:
@@ -200,23 +277,36 @@ categories:
       - name: contributors_training_volume
         path: contributors.training_volume
         help: Score contribution of exercise volume over the previous 7 days (1-100).
+    series:
+      - name: met
+        type: samples
+        help: MET value of each minute.
+      - name: class_5_min
+        path: class_5_min
+        type: string
+        interval: 300
+        start: timestamp
+        help: "Activity class per 5 minutes: 0 non wear, 1 rest, 2 inactive, 3 low, 4 medium, 5 high."
 
   - name: heartrate
     title: Heart rate
-    summary: most recent sample
-    kind: latest
+    kind: sample
     prefix: oura_heartrate_
     metrics:
       - name: bpm
-        help: Most recent heart rate sample, in beats per minute.
+        help: Heart rate, in beats per minute.
       - name: source
-        type: enum
-        states: [awake, rest, sleep, session, live, workout]
-        help: Source of the most recent heart rate sample.
+        mapping:
+          awake: 1
+          rest: 2
+          sleep: 3
+          session: 4
+          live: 5
+          workout: 6
+        help: "Source of the heart rate sample as a number: 1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout."
 
   - name: daily_stress
     title: Stress
-    summary: latest day
     kind: daily
     prefix: oura_daily_stress_
     metrics:
@@ -235,7 +325,6 @@ categories:
 
   - name: daily_resilience
     title: Resilience
-    summary: latest day
     kind: daily
     prefix: oura_daily_resilience_
     metrics:
@@ -259,7 +348,6 @@ categories:
 
   - name: daily_spo2
     title: SpO2
-    summary: latest night
     kind: daily
     prefix: oura_daily_spo2_
     metrics:
@@ -271,17 +359,129 @@ categories:
 
   - name: ring_battery_level
     title: Ring battery
-    summary: most recent sample
-    kind: latest
+    kind: sample
     prefix: oura_ring_battery_
     metrics:
       - name: level_percent
         path: level
-        help: Ring battery level at the most recent sample, in percent.
+        help: Ring battery level, in percent.
       - name: charging
-        help: 1 if the ring was charging at the most recent sample.
+        help: 1 if the ring was charging.
       - name: in_charger
-        help: 1 if the ring was in its charger at the most recent sample.
+        help: 1 if the ring was in its charger.
+
+  - name: workout
+    title: Workouts
+    kind: event
+    prefix: oura_workout_
+    time_path: start_datetime
+    end_path: end_datetime
+    labels:
+      - name: activity
+      - name: intensity
+      - name: source
+    metrics:
+      - name: calories_kilocalories
+        path: calories
+        help: Energy burned during the workout, in kilocalories.
+      - name: distance_meters
+        path: distance
+        help: Distance traveled during the workout, in meters.
+
+  - name: session
+    title: Sessions
+    kind: event
+    prefix: oura_session_
+    time_path: start_datetime
+    end_path: end_datetime
+    labels:
+      - name: session_type
+        path: type
+      - name: mood
+    series:
+      - name: heart_rate_bpm
+        path: heart_rate
+        type: samples
+        help: Heart rate during the session, in beats per minute.
+      - name: heart_rate_variability_milliseconds
+        path: heart_rate_variability
+        type: samples
+        help: Heart rate variability during the session, in milliseconds.
+      - name: motion_count
+        type: samples
+        help: Motion count during the session.
+
+  - name: sleep_time
+    title: Bedtime guidance
+    kind: daily
+    prefix: oura_sleep_time_
+    metrics:
+      - name: optimal_bedtime_day_tz_offset_seconds
+        path: optimal_bedtime.day_tz
+        help: Time zone offset of the day from GMT, in seconds.
+      - name: optimal_bedtime_start_offset_seconds
+        path: optimal_bedtime.start_offset
+        help: Start of the optimal bedtime window, in seconds from midnight.
+      - name: optimal_bedtime_end_offset_seconds
+        path: optimal_bedtime.end_offset
+        help: End of the optimal bedtime window, in seconds from midnight.
+      - name: recommendation
+        mapping:
+          improve_efficiency: 1
+          earlier_bedtime: 2
+          later_bedtime: 3
+          earlier_wake_up_time: 4
+          later_wake_up_time: 5
+          follow_optimal_bedtime: 6
+        help: "Bedtime recommendation as a number: 1 improve_efficiency, 2 earlier_bedtime, 3 later_bedtime, 4 earlier_wake_up_time, 5 later_wake_up_time, 6 follow_optimal_bedtime."
+      - name: status
+        mapping:
+          not_enough_nights: 1
+          not_enough_recent_nights: 2
+          bad_sleep_quality: 3
+          only_recommended_found: 4
+          optimal_found: 5
+        help: "Status of the bedtime recommendation as a number: 1 not_enough_nights, 2 not_enough_recent_nights, 3 bad_sleep_quality, 4 only_recommended_found, 5 optimal_found."
+
+  - name: vo2_max
+    endpoint: vO2_max
+    title: VO2 max
+    kind: daily
+    prefix: oura_vo2_max_
+    metrics:
+      - name: ml_per_minute_per_kilogram
+        path: vo2_max
+        help: Estimated VO2 max, in milliliters of oxygen per minute per kilogram.
+
+  - name: daily_cardiovascular_age
+    title: Cardiovascular age
+    kind: daily
+    prefix: oura_daily_cardiovascular_age_
+    metrics:
+      - name: vascular_age_years
+        path: vascular_age
+        help: Predicted vascular age, in years.
+      - name: pulse_wave_velocity_meters_per_second
+        path: pulse_wave_velocity
+        help: Pulse wave velocity derived from the vascular age, in meters per second.
+
+  - name: enhanced_tag
+    title: Tags
+    kind: event
+    prefix: oura_enhanced_tag_
+    time_path: start_time
+    end_path: end_time
+    no_end: zero
+    labels:
+      - name: tag_type_code
+      - name: custom_name
+
+  - name: rest_mode_period
+    title: Rest mode
+    kind: event
+    prefix: oura_rest_mode_
+    time_path: start_time
+    end_path: end_time
 
   - name: personal_info
     title: Profile
@@ -302,3 +502,31 @@ categories:
       - name: biological_sex
         type: info
         help: Biological sex from the Oura profile.
+
+  - name: ring_configuration
+    title: Ring
+    summary: refreshed hourly
+    kind: single
+    refresh_interval: 3600
+    prefix: oura_ring_
+    labels:
+      - name: ring
+        path: id
+    metrics:
+      - name: size
+        help: US ring size.
+      - name: color
+        type: info
+        help: Color of the ring.
+      - name: design
+        type: info
+        help: Design of the ring.
+      - name: hardware_type
+        type: info
+        help: Hardware generation of the ring.
+      - name: firmware_version
+        type: info
+        help: Firmware version of the ring.
+      - name: set_up_at
+        type: info
+        help: UTC time the ring was set up.

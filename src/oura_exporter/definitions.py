@@ -3,8 +3,8 @@ import logging
 import math
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -18,17 +18,21 @@ logger = logging.getLogger(__name__)
 NAME_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 ENDPOINT_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
 RESERVED_PREFIX = "oura_exporter_"
-LOOKBACK_DAYS = 7
+RESERVED_LABELS = frozenset({"job", "le", "quantile"})
 MAX_WARNED = 1000
-MIN_DATETIME = datetime.min.replace(tzinfo=UTC)
+SAMPLE_CHUNK_DAYS = 7
+CHUNK_DAYS = 30
 
-type MetricType = Literal["gauge", "enum", "info"]
-type Kind = Literal["daily", "latest", "single"]
+type MetricType = Literal["gauge", "info"]
+type Kind = Literal["daily", "sample", "event", "single"]
+type SeriesType = Literal["samples", "string"]
+type NoEnd = Literal["skip", "zero"]
 type Document = Mapping[str, Any]
-type Scalar = str | int | float | bool
 
-METRIC_TYPES = ("gauge", "enum", "info")
-KINDS = ("daily", "latest", "single")
+METRIC_TYPES = ("gauge", "info")
+KINDS = ("daily", "sample", "event", "single")
+SERIES_TYPES = ("samples", "string")
+NO_END = ("skip", "zero")
 CATEGORY_KEYS = frozenset(
     {
         "name",
@@ -38,14 +42,24 @@ CATEGORY_KEYS = frozenset(
         "kind",
         "prefix",
         "refresh_interval",
-        "select",
-        "sort_by",
+        "time_path",
+        "end_path",
+        "no_end",
+        "labels",
+        "series",
         "metrics",
     }
 )
-DEFAULT_SUMMARIES = {"daily": "latest day", "latest": "most recent sample", "single": "profile"}
+DEFAULT_SUMMARIES = {
+    "daily": "daily value",
+    "sample": "every sample",
+    "event": "every event",
+    "single": "profile",
+}
 CONTRIBUTOR_PREFIX = "contributors_"
-METRIC_KEYS = frozenset({"name", "help", "path", "type", "mapping", "states", "transform"})
+METRIC_KEYS = frozenset({"name", "help", "path", "type", "mapping"})
+LABEL_KEYS = frozenset({"name", "path"})
+SERIES_KEYS = frozenset({"name", "help", "path", "type", "interval", "start"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,8 +70,6 @@ class Metric:
     path: tuple[str, ...]
     type: MetricType = "gauge"
     mapping: Mapping[str, float] | None = None
-    states: tuple[str, ...] = ()
-    transform: Literal["timestamp"] | None = None
 
     @property
     def exposed_name(self) -> str:
@@ -65,9 +77,20 @@ class Metric:
 
 
 @dataclass(frozen=True, slots=True)
-class Snapshot:
-    values: Mapping[str, float | str] = field(default_factory=dict)
-    timestamp: float | None = None
+class Label:
+    name: str
+    path: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Series:
+    name: str
+    full_name: str
+    help: str
+    path: tuple[str, ...]
+    type: SeriesType
+    interval: float | None = None
+    start: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,41 +100,58 @@ class Category:
     kind: Kind
     prefix: str
     metrics: tuple[Metric, ...]
+    series: tuple[Series, ...] = ()
+    labels: tuple[Label, ...] = ()
     refresh_interval: int | None = None
-    select: Mapping[str, Scalar] = field(default_factory=dict)
-    sort_by: str | None = None
+    time_path: tuple[str, ...] | None = None
+    end_path: tuple[str, ...] | None = None
+    no_end: NoEnd = "skip"
     title: str = ""
     summary: str = ""
 
     @property
-    def timestamp_name(self) -> str | None:
-        return None if self.kind == "single" else f"{self.prefix}timestamp_seconds"
+    def duration_name(self) -> str | None:
+        return None if self.end_path is None else f"{self.prefix}duration_seconds"
 
     @property
     def fields(self) -> tuple[str, ...]:
-        names = {metric.path[0] for metric in self.metrics}
+        paths = [metric.path for metric in self.metrics]
+        paths += [label.path for label in self.labels]
+        for series in self.series:
+            paths.append(series.path)
+            if series.start is not None:
+                paths.append(series.start)
+        for optional in (self.time_path, self.end_path):
+            if optional is not None:
+                paths.append(optional)
+        names = {path[0] for path in paths}
         if self.kind == "daily":
             names.add("day")
-            names.update(key.split(".")[0] for key in self.select)
-            if self.sort_by:
-                names.add(self.sort_by.split(".")[0])
-        elif self.kind == "latest":
-            names.add("timestamp")
         return tuple(sorted(names))
 
-    def params(self, today: date, *, with_fields: bool = True) -> dict[str, str]:
+    def windows(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        step = timedelta(days=SAMPLE_CHUNK_DAYS if self.kind == "sample" else CHUNK_DAYS)
+        windows: list[tuple[datetime, datetime]] = []
+        current = start
+        while current < end:
+            windows.append((current, min(current + step, end)))
+            current += step
+        return windows or [(start, end)]
+
+    def params(self, start: datetime, end: datetime, *, with_fields: bool = True) -> dict[str, str]:
         params: dict[str, str] = {}
-        if self.kind == "daily":
-            params["start_date"] = (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
-            params["end_date"] = (today + timedelta(days=1)).isoformat()
-        elif self.kind == "latest":
-            params["latest"] = "true"
+        if self.kind in ("daily", "event"):
+            params["start_date"] = start.astimezone().date().isoformat()
+            params["end_date"] = (end.astimezone().date() + timedelta(days=1)).isoformat()
+        elif self.kind == "sample":
+            params["start_datetime"] = start.astimezone(UTC).isoformat()
+            params["end_datetime"] = end.astimezone(UTC).isoformat()
         if with_fields and self.kind != "single":
             params["fields"] = ",".join(self.fields)
         return params
 
 
-def _walk(document: Document, path: Iterable[str]) -> Any:
+def walk(document: Document, path: Iterable[str]) -> Any:
     current: Any = document
     for key in path:
         if not isinstance(current, Mapping):
@@ -122,7 +162,7 @@ def _walk(document: Document, path: Iterable[str]) -> Any:
     return current
 
 
-def _parse_datetime(value: object) -> datetime | None:
+def parse_datetime(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     with contextlib.suppress(ValueError, OverflowError, OSError):
@@ -134,7 +174,7 @@ def _parse_datetime(value: object) -> datetime | None:
     return None
 
 
-def _parse_day(value: object) -> date | None:
+def parse_day(value: object) -> date | None:
     if not isinstance(value, str):
         return None
     try:
@@ -143,104 +183,24 @@ def _parse_day(value: object) -> date | None:
         return None
 
 
-def _selected(document: Document, select: Mapping[str, Scalar]) -> bool:
-    return all(_walk(document, key.split(".")) == wanted for key, wanted in select.items())
-
-
-def _pick_daily(category: Category, documents: Iterable[Document]) -> tuple[Document, float] | None:
-    best: tuple[tuple[date, datetime], Document] | None = None
-    sort_path = category.sort_by.split(".") if category.sort_by else None
-    for document in documents:
-        if not _selected(document, category.select):
-            continue
-        day = _parse_day(document.get("day"))
-        if day is None:
-            continue
-        tie_break = _parse_datetime(_walk(document, sort_path)) if sort_path else None
-        key = (day, tie_break or MIN_DATETIME)
-        if best is None or key >= best[0]:
-            best = (key, document)
-    if best is None:
-        return None
-    midnight = datetime.combine(best[0][0], time.min).astimezone()
-    return best[1], midnight.timestamp()
-
-
-def _pick_latest(documents: Iterable[Document]) -> tuple[Document, float] | None:
-    best: tuple[datetime, Document] | None = None
-    for document in documents:
-        sampled = _parse_datetime(document.get("timestamp"))
-        if sampled is not None and (best is None or sampled >= best[0]):
-            best = (sampled, document)
-    return None if best is None else (best[1], best[0].timestamp())
-
-
-def _gauge_value(metric: Metric, raw: object) -> float | None:
-    if metric.mapping is not None:
-        if isinstance(raw, str) and raw in metric.mapping:
-            return float(metric.mapping[raw])
-        return None
-    if metric.transform == "timestamp":
-        parsed = _parse_datetime(raw)
-        return None if parsed is None else parsed.timestamp()
+def number(raw: object) -> float | None:
     if isinstance(raw, bool):
         return 1.0 if raw else 0.0
     if isinstance(raw, int | float):
         try:
-            number = float(raw)
+            value = float(raw)
         except OverflowError:
             return None
-        return number if math.isfinite(number) else None
+        return value if math.isfinite(value) else None
     return None
 
 
-def _convert(metric: Metric, raw: object) -> float | str | None:
-    if metric.type == "gauge":
-        return _gauge_value(metric, raw)
-    if metric.type == "enum":
-        return raw if isinstance(raw, str) and raw in metric.states else None
-    return str(raw)
-
-
-def extract_values(
-    category: Category, document: Document, warned: set[tuple[str, str]] | None = None
-) -> dict[str, float | str]:
-    seen = warned if warned is not None else set()
-    values: dict[str, float | str] = {}
-    for metric in category.metrics:
-        raw = _walk(document, metric.path)
-        if raw is None:
-            continue
-        value = _convert(metric, raw)
-        if value is None:
-            key = (metric.full_name, repr(raw)[:100])
-            if key not in seen and len(seen) < MAX_WARNED:
-                seen.add(key)
-                logger.warning(
-                    "%s: ignoring unexpected value %s; the series is omitted",
-                    metric.full_name,
-                    key[1],
-                )
-            continue
-        values[metric.name] = value
-    return values
-
-
-def build_snapshot(
-    category: Category, documents: Iterable[Document], warned: set[tuple[str, str]] | None = None
-) -> Snapshot:
-    if category.kind == "single":
-        chosen: tuple[Document, float | None] | None = next(
-            ((document, None) for document in documents), None
-        )
-    elif category.kind == "daily":
-        chosen = _pick_daily(category, documents)
-    else:
-        chosen = _pick_latest(documents)
-    if chosen is None:
-        return Snapshot()
-    document, timestamp = chosen
-    return Snapshot(extract_values(category, document, warned), timestamp)
+def gauge_value(metric: Metric, raw: object) -> float | None:
+    if metric.mapping is not None:
+        if isinstance(raw, str) and raw in metric.mapping:
+            return float(metric.mapping[raw])
+        return None
+    return number(raw)
 
 
 def _mapping(value: object, where: str) -> dict[str, Any]:
@@ -269,6 +229,16 @@ def _identifier(data: Mapping[str, Any], key: str, where: str) -> str:
     return value
 
 
+def _path(
+    data: Mapping[str, Any], key: str, where: str, default: str | None = None
+) -> tuple[str, ...]:
+    text = _string(data, key, where, default)
+    path = tuple(text.split("."))
+    if not all(path):
+        raise ConfigError(f"{where}: '{key}' has an empty segment: {text!r}")
+    return path
+
+
 def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -283,24 +253,14 @@ def _parse_metric(raw: object, prefix: str, where: str) -> Metric:
     name = _identifier(data, "name", where)
     where = f"{where} ({name})"
     help_text = _string(data, "help", where)
-    path_text = _string(data, "path", where, default=name)
-    path = tuple(path_text.split("."))
-    if not all(path):
-        raise ConfigError(f"{where}: 'path' has an empty segment: {path_text!r}")
+    path = _path(data, "path", where, default=name)
 
     metric_type = data.get("type", "gauge")
     if metric_type not in METRIC_TYPES:
         raise ConfigError(f"{where}: 'type' must be one of {', '.join(METRIC_TYPES)}")
     mapping_raw = data.get("mapping")
-    states_raw = data.get("states")
-    transform = data.get("transform")
-
-    if metric_type != "gauge" and (mapping_raw is not None or transform is not None):
-        raise ConfigError(f"{where}: 'mapping' and 'transform' are only valid for gauges")
-    if metric_type != "enum" and states_raw is not None:
-        raise ConfigError(f"{where}: 'states' is only valid for enum metrics")
-    if mapping_raw is not None and transform is not None:
-        raise ConfigError(f"{where}: 'mapping' and 'transform' are mutually exclusive")
+    if metric_type != "gauge" and mapping_raw is not None:
+        raise ConfigError(f"{where}: 'mapping' is only valid for gauges")
 
     mapping: dict[str, float] | None = None
     if mapping_raw is not None:
@@ -309,20 +269,6 @@ def _parse_metric(raw: object, prefix: str, where: str) -> Metric:
             raise ConfigError(f"{where}: 'mapping' must map strings to finite numbers")
         mapping = {key: float(value) for key, value in mapping_data.items()}
 
-    states: tuple[str, ...] = ()
-    if metric_type == "enum":
-        if (
-            not isinstance(states_raw, list)
-            or not states_raw
-            or not all(isinstance(state, str) and state for state in states_raw)
-            or len(set(states_raw)) != len(states_raw)
-        ):
-            raise ConfigError(f"{where}: 'states' must be a non-empty list of unique strings")
-        states = tuple(states_raw)
-
-    if transform is not None and transform != "timestamp":
-        raise ConfigError(f"{where}: 'transform' must be 'timestamp'")
-
     return Metric(
         name=name,
         full_name=f"{prefix}{name}",
@@ -330,9 +276,54 @@ def _parse_metric(raw: object, prefix: str, where: str) -> Metric:
         path=path,
         type=metric_type,
         mapping=mapping,
-        states=states,
-        transform=transform,
     )
+
+
+def _parse_label(raw: object, where: str) -> Label:
+    data = _mapping(raw, where)
+    _check_keys(data, LABEL_KEYS, where)
+    name = _identifier(data, "name", where)
+    where = f"{where} ({name})"
+    if name in RESERVED_LABELS or name.startswith("__"):
+        raise ConfigError(f"{where}: label name {name!r} is reserved")
+    return Label(name=name, path=_path(data, "path", where, default=name))
+
+
+def _parse_series(raw: object, prefix: str, where: str) -> Series:
+    data = _mapping(raw, where)
+    _check_keys(data, SERIES_KEYS, where)
+    name = _identifier(data, "name", where)
+    where = f"{where} ({name})"
+    help_text = _string(data, "help", where)
+    path = _path(data, "path", where, default=name)
+    series_type = data.get("type")
+    if series_type not in SERIES_TYPES:
+        raise ConfigError(f"{where}: 'type' must be one of {', '.join(SERIES_TYPES)}")
+    interval: float | None = None
+    start: tuple[str, ...] | None = None
+    if series_type == "string":
+        interval = number(data.get("interval"))
+        if interval is None or interval <= 0:
+            raise ConfigError(f"{where}: 'interval' must be a positive number of seconds")
+        start = _path(data, "start", where)
+    elif "interval" in data or "start" in data:
+        raise ConfigError(f"{where}: 'interval' and 'start' are only valid for type 'string'")
+    return Series(
+        name=name,
+        full_name=f"{prefix}{name}",
+        help=help_text,
+        path=path,
+        type=series_type,
+        interval=interval,
+        start=start,
+    )
+
+
+def _parse_list(data: Mapping[str, Any], key: str, where: str) -> list[Any]:
+    value = data.get(key, [])
+    if not isinstance(value, list):
+        raise ConfigError(f"{where}: '{key}' must be a list")
+    return value
 
 
 def _parse_category(raw: object, where: str) -> Category:
@@ -355,34 +346,50 @@ def _parse_category(raw: object, where: str) -> Category:
     if refresh_interval is not None and not _is_positive_int(refresh_interval):
         raise ConfigError(f"{where}: 'refresh_interval' must be a positive integer (seconds)")
 
-    select: dict[str, Scalar] = {}
-    if "select" in data:
-        select_data = _mapping(data["select"], f"{where}: 'select'")
-        if not all(isinstance(value, str | int | float | bool) for value in select_data.values()):
-            raise ConfigError(f"{where}: 'select' values must be strings, numbers or booleans")
-        select = dict(select_data)
-    sort_by = data.get("sort_by")
-    if sort_by is not None and (not isinstance(sort_by, str) or not sort_by.strip()):
-        raise ConfigError(f"{where}: 'sort_by' must be a non-empty string")
-    if kind != "daily" and (select or sort_by is not None):
-        raise ConfigError(f"{where}: 'select' and 'sort_by' are only valid for kind 'daily'")
+    time_path: tuple[str, ...] | None = None
+    if kind == "sample":
+        time_path = _path(data, "time_path", where, default="timestamp")
+    elif kind == "event":
+        time_path = _path(data, "time_path", where)
+    elif "time_path" in data:
+        raise ConfigError(f"{where}: 'time_path' is only valid for kinds 'sample' and 'event'")
+    end_path: tuple[str, ...] | None = None
+    if "end_path" in data:
+        if kind != "event":
+            raise ConfigError(f"{where}: 'end_path' is only valid for kind 'event'")
+        end_path = _path(data, "end_path", where)
+    no_end = data.get("no_end", "skip")
+    if no_end not in NO_END:
+        raise ConfigError(f"{where}: 'no_end' must be one of {', '.join(NO_END)}")
+    if "no_end" in data and end_path is None:
+        raise ConfigError(f"{where}: 'no_end' needs 'end_path'")
 
-    metrics_raw = data.get("metrics")
-    if not isinstance(metrics_raw, list) or not metrics_raw:
-        raise ConfigError(f"{where}: 'metrics' must be a non-empty list")
+    labels = tuple(
+        _parse_label(item, f"{where}: labels[{index}]")
+        for index, item in enumerate(_parse_list(data, "labels", where))
+    )
+    series = tuple(
+        _parse_series(item, prefix, f"{where}: series[{index}]")
+        for index, item in enumerate(_parse_list(data, "series", where))
+    )
     metrics = tuple(
         _parse_metric(item, prefix, f"{where}: metrics[{index}]")
-        for index, item in enumerate(metrics_raw)
+        for index, item in enumerate(_parse_list(data, "metrics", where))
     )
+    if not (metrics or series or end_path):
+        raise ConfigError(f"{where}: needs 'metrics', 'series' or 'end_path'")
     return Category(
         name=name,
         endpoint=endpoint,
         kind=kind,
         prefix=prefix,
         metrics=metrics,
+        series=series,
+        labels=labels,
         refresh_interval=refresh_interval,
-        select=select,
-        sort_by=sort_by,
+        time_path=time_path,
+        end_path=end_path,
+        no_end=no_end,
         title=title,
         summary=summary,
     )
@@ -400,9 +407,13 @@ def _check_unique(categories: tuple[Category, ...], source: str) -> None:
                 f"{source}: category {category.name!r}: prefix must not start with "
                 f"{RESERVED_PREFIX!r} (reserved for the exporter's own metrics)"
             )
+        label_names = [label.name for label in category.labels]
+        if len(set(label_names)) != len(label_names):
+            raise ConfigError(f"{source}: category {category.name!r}: duplicate label name")
         sample_names = [metric.exposed_name for metric in category.metrics]
-        if category.timestamp_name is not None:
-            sample_names.append(category.timestamp_name)
+        sample_names += [series.full_name for series in category.series]
+        if category.duration_name is not None:
+            sample_names.append(category.duration_name)
         for sample_name in sample_names:
             if sample_name in exposed:
                 raise ConfigError(f"{source}: duplicate metric name {sample_name!r}")
@@ -442,11 +453,21 @@ def load_definitions(path: Path | None = None) -> tuple[Category, ...]:
     return parse_definitions(data, source)
 
 
+def help_texts(categories: Iterable[Category]) -> dict[str, str]:
+    texts: dict[str, str] = {}
+    for category in categories:
+        for metric in category.metrics:
+            texts[metric.exposed_name] = metric.help
+        for series in category.series:
+            texts[series.full_name] = series.help
+        if category.duration_name is not None:
+            texts[category.duration_name] = "Duration of the event, in seconds."
+    return texts
+
+
 def _metric_label(metric: Metric) -> str:
     if metric.type == "info":
         return f"{metric.name}_info"
-    if metric.type == "enum":
-        return f"{metric.name} (state set)"
     if metric.mapping:
         return f"{metric.name} ({min(metric.mapping.values()):g}-{max(metric.mapping.values()):g})"
     return metric.name
@@ -463,8 +484,9 @@ def render_metric_list(categories: Iterable[Category]) -> str:
                 contributors.append(label.removeprefix(CONTRIBUTOR_PREFIX))
             else:
                 names.append(label)
-        if category.timestamp_name is not None:
-            names.append("timestamp_seconds")
+        names += [series.name for series in category.series]
+        if category.duration_name is not None:
+            names.append("duration_seconds")
         lines.append(f"- **{category.title}** · `{category.prefix}*` · {category.summary}<br>")
         if names:
             lines.append("  " + _code_list(names) + ("<br>" if contributors else ""))
