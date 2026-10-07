@@ -25,8 +25,8 @@ with a smoke test.
 
 ## Golden files
 
-`example/oura.prom` is the exposition produced from the fixtures in `tests/fixtures`, and the
-metric list in `README.md` is rendered from `metrics.yml`. Tests compare against both. After
+`example/samples.txt` is the dump of the samples pushed for the fixtures in `tests/fixtures`
+(series, timestamp, value), and the metric list in `README.md` is rendered from `metrics.yml`. Tests compare against both. After
 changing `metrics.yml` or the fixtures, regenerate them and review the diff:
 
 ```bash
@@ -43,14 +43,24 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
 - Name with the unit as a suffix (`_seconds`, `_percent`, `_celsius`, ...); scores are unitless.
 - `path` is the dotted path into the Oura document, it defaults to the name.
 - A missing or `null` value must mean "no series", never `0`.
+- Every category has a `kind`: `daily` (one document per `day`), `sample` (one document is one
+  sample at `timestamp`), `event` (a document with its own `time_path` and optionally an
+  `end_path` for `<prefix>duration_seconds`) or `single` (profile). `labels` turn low-cardinality
+  string fields into labels (never free text), `series` export embedded time series: `type:
+  samples` for `{interval, items, timestamp}` objects, `type: string` for digit strings with a
+  fixed `interval` and a `start` path.
+- Enums are gauges with a `mapping` to numbers; document the codes in `help`.
 - A category also takes optional `title` and `summary` keys for the README list. The
-  defaults are the name with spaces, and `latest day`, `most recent sample` or `profile`
-  depending on its kind.
-- The order in the file is the order of the README list and of the exposition: headline
-  values first. `contributors_*` metrics are listed on a line of their own, without the
+  defaults are the name with spaces, and `daily value`, `every sample`, `every event` or
+  `profile` depending on its kind.
+- The order in the file is the order of the README list: headline values first. `contributors_*` metrics are listed on a line of their own, without the
   prefix.
 - Add the field to the matching file in `tests/fixtures` (and its `_nulls` variant), then
   regenerate the golden files.
+- `tests/test_openapi.py` checks `tests/fixtures/openapi.json` (Oura's OpenAPI spec): every
+  `/v2/usercollection/*` endpoint needs a category, every numeric, boolean or enum field must
+  be mapped or sit on the commented skip list in that test. Replace the file with the
+  current spec to find new fields.
 
 ## Invariants a PR must not break
 
@@ -59,11 +69,14 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
    and surfaced through `oura_exporter_token_persisted`.
 2. **Never exchange an authorization code with a freshly generated PKCE verifier.** Without
    a matching pending authorization the exporter asks for a new code instead.
-3. **No tokens, secrets or personal data in logs or labels.** Data metrics have no labels.
+3. **No tokens, secrets or personal data in logs or labels.** Labels are low-cardinality
+   fields from the Oura documents, never free text or the email.
 4. **Any field can be `null`**, the user may untick scopes on the consent page. Parsing is
    tolerant and drops a series instead of failing the category.
 5. **`/metrics` only starts after authentication succeeded**, and the exporter has to keep
    working with `--read-only --cap-drop=ALL --security-opt no-new-privileges`.
+6. **Samples are only recorded as delivered after a successful push**, and a sample that is
+   already delivered with another value is never resent silently (it is counted).
 
 ## Commits
 

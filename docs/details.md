@@ -47,41 +47,101 @@ writes a new one: the file is replaced atomically, and `oura_exporter_token_pers
 - One instance per directory, enforced by a lock. Two instances would invalidate each other's
   refresh tokens.
 
-## Prometheus
+## Receiver
 
-Metrics carry no label that identifies the person, add it in the scrape configuration. Oura
-data changes a few times a day, so a modest interval is enough:
+The exporter pushes with Prometheus remote write 1.0 (`OURA_REMOTE_WRITE_URL`, optional basic
+auth through `OURA_REMOTE_WRITE_USERNAME` and `OURA_REMOTE_WRITE_PASSWORD(_FILE)`). The receiver
+needs an out-of-order window of at least `OURA_LOOKBACK_DAYS`:
+
+```yaml
+storage:
+  tsdb:
+    out_of_order_time_window: 7d
+```
+
+Prometheus also needs `--web.enable-remote-write-receiver`. For Mimir and Grafana Cloud enable
+`out_of_order_time_window` for the tenant. Without it the receiver answers HTTP 400 ("too old")
+and `oura_exporter_remote_write_samples_total{result="rejected"}` grows.
+
+`/metrics` carries only the exporter's own health, scrape it like any exporter:
 
 ```yaml
 scrape_configs:
-  - job_name: oura
-    scrape_interval: 5m
+  - job_name: oura-exporter-health
     static_configs:
       - targets: ["oura-exporter:8000"]
-        labels:
-          person: alice
 ```
+
+Pushed series have no label that identifies the person, add it with `external_labels` or
+relabeling on the receiver side. Keep the lookback at 3 days or more: sleep documents reach
+about a day before it, and a late ring sync can add samples long after the fact.
 
 ## How values behave
 
-- **Latest document.** Daily categories export the newest document of the last 7 days. `sleep`
-  uses the `long_sleep` document of the latest day that ends last, `heartrate` and
-  `ring_battery_level` ask Oura for the most recent sample, and the profile is refreshed hourly.
-- **Age.** `<prefix>timestamp_seconds` is the local midnight of the document's day, or the time
-  of the sample. `time() - oura_daily_sleep_timestamp_seconds` is how old the data is.
+- **Window.** Every poll fetches `[now - OURA_LOOKBACK_DAYS, now]` of every category, in ranges
+  of at most 30 days (7 for heart rate and battery), and follows `next_token`. Nothing is
+  fetched from a watermark: phone heart rate and late ring syncs can add older samples later.
+  Samples older than the window are dropped.
+- **De-duplication.** The exporter remembers which `(series, timestamp)` it delivered and only
+  sends new or changed samples. The memory is updated after a successful push only, so failures
+  retry in the next cycle. After a restart the whole window is sent again, identical duplicates
+  are harmless.
+- **Samples** (`heartrate`, `ring_battery_level`) sit at their own `timestamp`.
+- **Events** (`sleep`, `workout`, `session`, `enhanced_tag`, `rest_mode_period`) sit at one
+  time of the document: sleep at `bedtime_end`, workouts and sessions at `start_datetime`, tags
+  and rest mode at `start_time`. Workouts, sessions, tags and rest mode also get
+  `<prefix>duration_seconds`. A tag without an end is an instant (0 s), rest mode without an
+  end is skipped until it ends. Labels: `sleep_type`; `activity`, `intensity`, `source` for
+  workouts; `session_type`, `mood`; `tag_type_code`, `custom_name`. Free text (workout `label`,
+  tag `comment`) and the `email` are never exported.
+- **Embedded series** are exported with the time of each item: heart rate and HRV of a night
+  (`timestamp + i * interval`), MET per minute, session heart rate, HRV and motion count, and the
+  digit strings of the sleep phases (30 s and 5 min), `movement_30_sec` and `class_5_min`. Empty
+  items are skipped. The help text of each series lists the codes.
+- **Daily documents** (`daily_*`, `sleep_time`, `vo2_max`) can be revised during the day, and a
+  receiver cannot overwrite a sample. The newest document of a category is pushed at fetch time
+  in every poll, like a gauge: its current value is always within Prometheus' 5-minute lookback
+  (keep `OURA_POLL_INTERVAL` below that). Every older day is pushed once, 12 hours after it
+  ended in the local time zone, at 23:59:59 of that day. `last_over_time(x[1d])` per day then
+  gives the final value.
+- **Profile** (`personal_info`, `ring_configuration`) is pushed at fetch time, refreshed hourly.
+- **Revisions.** A value that changes after it was delivered (a sleep document that grows, a
+  day revised after it settled) is sent again and counted in
+  `oura_exporter_sample_revisions_total`, the details are logged at debug. What the receiver does
+  with it differs: Prometheus 3.15 overwrote the value of a sample inside its out-of-order window
+  in testing, a receiver that keeps the first value answers HTTP 400, which shows up as
+  `rejected`.
 - **Missing values.** A field Oura reports as `null`, for example because a scope was not
-  granted or there is not enough data, is left out: the series disappears instead of showing 0.
-- **Errors.** When a request fails the previous values stay. `oura_exporter_category_up` shows the
-  failure and the timestamps show the age.
-- **Ordinal values.** `oura_daily_resilience_level`: 1 limited, 2 adequate, 3 solid, 4 strong,
-  5 exceptional. `oura_daily_stress_day_summary`: 1 restored, 2 normal, 3 stressful.
-- **State sets.** `oura_heartrate_source{oura_heartrate_source="rest"}` has one series per state
-  (awake, rest, sleep, session, live, workout), the current one is 1.
+  granted or there is not enough data, is left out.
+- **Errors.** A failed fetch leaves the category as it is. A failed push is retried with the
+  next poll. `oura_exporter_category_up` shows fetch failures.
+- **Enums** are numbers. Examples: `oura_daily_resilience_level` 1 limited, 2 adequate, 3 solid,
+  4 strong, 5 exceptional; `oura_daily_stress_day_summary` 1 restored, 2 normal, 3 stressful;
+  `oura_heartrate_source` 1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout. All codes are
+  in the help text of the metric.
 - **Info.** `oura_personal_info_biological_sex_info{biological_sex="male"}` is always 1.
-- **Time zone.** `TZ` decides what "today" is and where a day starts. It defaults to UTC in the
+- **Time zone.** `TZ` decides what "today" is and where a day ends. It defaults to UTC in the
   image. An unknown name falls back to UTC silently in the C library, so the exporter warns.
 - **Own definitions.** `OURA_METRICS_CONFIG` points to a replacement for the packaged
   [`metrics.yml`](../src/oura_exporter/metrics.yml), see [CONTRIBUTING](../CONTRIBUTING.md).
+
+## Backfill
+
+`oura-exporter backfill --start 2026-01-01 [--end 2026-03-31] --output history.om` fetches a date
+range and writes OpenMetrics text with timestamps, for `promtool`. It uses the same environment,
+token and data directory as the service and must not run while the service holds the lock
+(`docker compose stop` first). The `--end` default is today; `OURA_REMOTE_WRITE_URL` is not
+needed. Completed days use the settled rule (23:59:59 of the day), nothing is stamped at fetch
+time, so the profile is left out.
+
+```bash
+docker compose run --rm -v "$PWD:/out" oura-exporter backfill --start 2026-01-01 --output /out/history.om
+promtool tsdb create-blocks-from openmetrics history.om ./blocks
+# move the blocks into the receiver's data directory (Prometheus: --storage.tsdb.path)
+```
+
+Blocks older than the head's out-of-order window can only be imported this way. Prometheus picks
+up new blocks without a restart. Mimir and Grafana Cloud need their own import path.
 
 ## Exporter metrics
 
@@ -93,6 +153,10 @@ scrape_configs:
 | `oura_exporter_category_up{category}` | 1 if the last fetch succeeded, 0 if it failed or was skipped because a rate limit or an authentication failure ended the cycle. |
 | `oura_exporter_category_last_success_timestamp_seconds{category}` | Time of the last successful fetch. |
 | `oura_exporter_category_errors_total{category,reason}` | Failed fetches. Reasons: `network`, `invalid_response`, `auth`, `forbidden`, `rate_limited`, `http_error`, `internal`. |
+| `oura_exporter_remote_write_samples_total{result}` | Pushed samples: `sent`, or `rejected` (a batch the receiver answered with HTTP 400; it stores the rest but does not say which samples). |
+| `oura_exporter_remote_write_failures_total{reason}` | Failed requests, retried next cycle. Reasons: `network`, `rate_limited`, `server_error`, `client_error`. |
+| `oura_exporter_remote_write_last_success_timestamp_seconds` | Time of the last successful request. |
+| `oura_exporter_sample_revisions_total` | Samples whose value changed after delivery and were sent again. |
 
 The standard `process_*` metrics and `python_info` are exposed as well.
 
@@ -103,8 +167,11 @@ groups:
   - name: oura
     rules:
       - alert: OuraDataStale
-        expr: time() - oura_daily_sleep_timestamp_seconds > 2 * 86400
+        expr: absent_over_time(oura_daily_sleep_score{job="oura-exporter"}[2d])
         for: 1h
+      - alert: OuraPushFailing
+        expr: time() - oura_exporter_remote_write_last_success_timestamp_seconds > 3600
+        for: 15m
       - alert: OuraAuthFailing
         expr: oura_exporter_auth_ok == 0
         for: 30m
@@ -120,7 +187,10 @@ groups:
 
 - Data only arrives when the Oura app syncs with the ring. Sleep data needs the app to be
   opened; activity and stress may sync in the background.
-- Heart rate is the most recent sample only, not a time series.
+- Daily values are revised by Oura. A day is pushed as final 12 hours after it ended; later
+  revisions are sent again and counted, whether the receiver applies them depends on it.
+- Everything inside `OURA_LOOKBACK_DAYS` is read again in every poll, which costs one request
+  per category and range. Raise `OURA_POLL_INTERVAL` before raising the lookback.
 - HTTP 403 means the scope was not granted or the Oura membership has expired. The category is
   reported as `forbidden` and retried hourly.
 - One exporter serves one Oura account. Run one instance per person, each with its own data
@@ -142,6 +212,35 @@ uv run --env-file .env oura-exporter
 `oura-exporter --version` prints the version and `oura-exporter --healthcheck` probes the local
 `/metrics` endpoint, which is what the image's `HEALTHCHECK` runs. Exit codes: 0 clean stop,
 1 authorization missing or the port could not be bound, 2 invalid configuration.
+
+## Migrating from 0.2.0
+
+0.3.0 changes how data reaches Prometheus.
+
+- **Data is pushed, not scraped.** Set `OURA_REMOTE_WRITE_URL` (required) and give the
+  receiver an out-of-order window of at least the lookback, see [Receiver](#receiver). The
+  data gauges are gone from `/metrics`, which now only has `oura_exporter_*`, `process_*` and
+  `python_info`. Remove the scrape job for the data or keep it for the health metrics.
+- **`*_timestamp_seconds` is gone** (including `oura_sleep_bedtime_start_timestamp_seconds` and
+  `oura_sleep_bedtime_end_timestamp_seconds`): every sample carries its own time now. Alerts on
+  data age use `absent_over_time` or the timestamp of the sample.
+- **Sleep** is no longer "the main sleep of the latest night". Every sleep period is exported
+  at its end with the label `sleep_type` (`long_sleep`, `late_nap`, ...), select
+  `sleep_type="long_sleep"` for the old view.
+- **Heart rate and ring battery** are every sample, not the most recent one.
+  `oura_heartrate_source` is a number (1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout),
+  not a state set.
+- **New scopes** `workout`, `session`, `tag` and `heart_health` are requested, so the stored
+  token has to be authorized again (stop the service, `docker compose run --rm -it
+  oura-exporter`). Without them only the new categories report `forbidden`.
+- **New data:** sleep series and nested readiness, daily activity MET and class series, workouts,
+  sessions, bedtime guidance, VO2 max, cardiovascular age, tags, rest mode and the ring
+  configuration, see the [metric list](../README.md#metrics).
+- New settings: `OURA_REMOTE_WRITE_URL`, `OURA_REMOTE_WRITE_USERNAME`,
+  `OURA_REMOTE_WRITE_PASSWORD(_FILE)`, `OURA_LOOKBACK_DAYS`. `oura-exporter backfill` is new.
+- In custom `metrics.yml` files the kinds are now `daily`, `sample`, `event` and `single`
+  (`latest` became `sample`), `select`, `sort_by`, `enum` metrics and `transform` are gone,
+  see the packaged file.
 
 ## Migrating from legnoh/oura-exporter
 
@@ -175,18 +274,16 @@ uv run --env-file .env oura-exporter
 | `oura_daily_stress_stress_high` | `oura_daily_stress_stress_high_seconds` |
 | `oura_daily_stress_recovery_high` | `oura_daily_stress_recovery_high_seconds` |
 | `oura_daily_stress_day_summary_info{val}` | `oura_daily_stress_day_summary` (1-3) |
-| `oura_heartrate_source_info{val}` | `oura_heartrate_source{oura_heartrate_source="rest"}` (state set) |
+| `oura_heartrate_source_info{val}` | `oura_heartrate_source` (1-6) |
 | `oura_personal_info_age` | `oura_personal_info_age_years` |
 | `oura_personal_info_weight` | `oura_personal_info_weight_kilograms` |
 | `oura_personal_info_height` | `oura_personal_info_height_meters` |
 | `oura_personal_info_biological_sex_info{val}` | `oura_personal_info_biological_sex_info{biological_sex}` |
 | `oura_personal_info_email_info` | removed |
 
-All other names are unchanged. `oura_heartrate_bpm` is now the most recent sample instead of the
-last entry of a 24 hour window. New: `oura_sleep_*`, `oura_ring_battery_*`,
+All other names are unchanged. New in 0.2.0: `oura_sleep_*`, `oura_ring_battery_*`,
 `oura_daily_readiness_contributors_sleep_regularity`,
-`oura_daily_spo2_breathing_disturbance_index`, the `*_timestamp_seconds` metrics and the
-`oura_exporter_*` self-metrics.
+`oura_daily_spo2_breathing_disturbance_index` and the `oura_exporter_*` self-metrics.
 
 ## Disclaimer
 

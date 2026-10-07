@@ -114,8 +114,8 @@ class Exporter:
         )
         self._revisions = Counter(
             "oura_exporter_sample_revisions",
-            "Samples whose value changed after they were delivered; the receiver keeps the "
-            "first value.",
+            "Samples whose value changed after they were delivered and were sent again; the "
+            "receiver decides which value it keeps.",
             registry=self.registry,
         )
         self._write_success = Gauge(
