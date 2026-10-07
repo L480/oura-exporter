@@ -64,20 +64,20 @@
       "heart_rate": {
         "interval": 300,
         "items": [
-          55.0,
-          53.0,
+          56.0,
+          54.0,
           null,
-          52.0
+          53.0
         ],
         "timestamp": "2026-10-05T23:12:41+00:00"
       },
       "hrv": {
         "interval": 300,
         "items": [
-          44.0,
-          51.0,
-          null,
-          49.0
+          41.0,
+          47.0,
+          50.0,
+          null
         ],
         "timestamp": "2026-10-05T23:12:41+00:00"
       },
@@ -85,20 +85,36 @@
       "light_sleep_duration": 14580,
       "low_battery_alert": false,
       "lowest_heart_rate": 47,
-      "movement_30_sec": "1114221",
+      "movement_30_sec": "1142",
       "period": 0,
-      "readiness": null,
-      "readiness_score_delta": null,
+      "readiness": {
+        "contributors": {
+          "activity_balance": 71,
+          "body_temperature": 98,
+          "hrv_balance": 80,
+          "previous_day_activity": 64,
+          "previous_night": 77,
+          "recovery_index": 88,
+          "resting_heart_rate": 93,
+          "sleep_balance": 79,
+          "sleep_regularity": 69
+        },
+        "score": 82,
+        "temperature_deviation": -0.25,
+        "temperature_trend_deviation": 0.1
+      },
+      "readiness_score_delta": 2,
       "rem_sleep_duration": 6120,
       "restless_periods": 312,
       "sleep_algorithm_version": "v2",
       "sleep_analysis_reason": "foreground_sleep_analysis",
-      "sleep_phase_30_sec": "444423323441114",
-      "sleep_phase_5_min": "444423323441114",
-      "sleep_score_delta": null,
+      "sleep_phase_30_sec": "42233",
+      "sleep_phase_5_min": "4223",
+      "sleep_score_delta": -1,
       "time_in_bed": 28080,
       "total_sleep_duration": 26040,
-      "type": "long_sleep"
+      "type": "long_sleep",
+      "app_sleep_phase_5_min": "4223"
     },
     {
       "id": "00000000-0000-4000-8000-000000000703",

@@ -55,7 +55,9 @@ fail_under = 85
 
 [dependency-groups]
 dev = [
+    "cramjam>=2.13.0",
     "mypy>=2.4.0",
+    "protobuf>=7.36.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "responses>=0.26.3",

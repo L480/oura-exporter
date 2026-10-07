@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000001301",
+      "tag_type_code": "tag_generic_alcohol",
+      "start_time": "2026-10-05T19:00:00+00:00",
+      "end_time": null,
+      "start_day": "2026-10-05",
+      "end_day": null,
+      "comment": "Two beers",
+      "custom_name": null
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000001302",
+      "tag_type_code": "custom",
+      "start_time": "2026-10-06T10:00:00+00:00",
+      "end_time": "2026-10-06T11:30:00+00:00",
+      "start_day": "2026-10-06",
+      "end_day": "2026-10-06",
+      "comment": null,
+      "custom_name": "Sauna"
+    }
+  ],
+  "next_token": null
+}

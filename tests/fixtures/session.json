@@ -1,0 +1,53 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4000-8000-000000000901",
+      "day": "2026-10-05",
+      "start_datetime": "2026-10-05T20:00:00+00:00",
+      "end_datetime": "2026-10-05T20:10:00+00:00",
+      "type": "meditation",
+      "mood": "good",
+      "heart_rate": {
+        "interval": 5.0,
+        "items": [
+          62.0,
+          60.5,
+          null,
+          59.0
+        ],
+        "timestamp": "2026-10-05T20:00:00+00:00"
+      },
+      "heart_rate_variability": {
+        "interval": 5.0,
+        "items": [
+          null,
+          45.0,
+          48.0
+        ],
+        "timestamp": "2026-10-05T20:00:00+00:00"
+      },
+      "motion_count": {
+        "interval": 5.0,
+        "items": [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        "timestamp": "2026-10-05T20:00:00+00:00"
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000902",
+      "day": "2026-10-06",
+      "start_datetime": "2026-10-06T09:00:00+00:00",
+      "end_datetime": "2026-10-06T09:05:00+00:00",
+      "type": "breathing",
+      "mood": null,
+      "heart_rate": null,
+      "heart_rate_variability": null,
+      "motion_count": null
+    }
+  ],
+  "next_token": null
+}
