@@ -44,6 +44,7 @@ def test_defaults() -> None:
         "session",
         "tag",
         "heart_health",
+        "ring_configuration",
     )
     assert settings.lookback_days == 3
     assert settings.remote_write_url == "http://prom:9090/api/v1/write"

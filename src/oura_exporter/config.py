@@ -19,6 +19,7 @@ DEFAULT_SCOPES = (
     "session",
     "tag",
     "heart_health",
+    "ring_configuration",
 )
 DEFAULT_TOKEN_PATH = "~/.config/oura-exporter/oauth_token.json"  # noqa: S105
 DEFAULT_API_BASE_URL = "https://api.ouraring.com"

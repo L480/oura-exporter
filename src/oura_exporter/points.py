@@ -22,6 +22,7 @@ JOB = "oura-exporter"
 SETTLE_DELAY = timedelta(hours=12)
 LAST_SECOND = time(23, 59, 59)
 DIGITS = frozenset("0123456789")
+FUTURE_SKEW_MS = 60_000
 
 type Labels = tuple[tuple[str, str], ...]
 type Key = tuple[str, Labels]
@@ -222,7 +223,28 @@ def build_points(
     if cutoff is not None:
         cutoff_ms = to_ms(cutoff)
         points = [point for point in points if point.timestamp_ms >= cutoff_ms]
-    return points
+    return _drop_future(category, points, now, seen)
+
+
+def _drop_future(
+    category: Category, points: list[Point], now: datetime, seen: Warned
+) -> list[Point]:
+    horizon = to_ms(now) + FUTURE_SKEW_MS
+    ahead = [point for point in points if point.timestamp_ms > horizon]
+    if not ahead:
+        return points
+    key = (category.name, "future")
+    if key not in seen and len(seen) < MAX_WARNED:
+        seen.add(key)
+        skew = (max(point.timestamp_ms for point in ahead) - to_ms(now)) // 1000
+        logger.info(
+            "%s: dropping %d samples dated up to %ds in the future, e.g. %s",
+            category.name,
+            len(ahead),
+            skew,
+            ahead[0].name,
+        )
+    return [point for point in points if point.timestamp_ms <= horizon]
 
 
 def _daily_points(

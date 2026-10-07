@@ -39,7 +39,7 @@ def series(
 
 
 def test_to_ms_rounds_to_milliseconds() -> None:
-    assert to_ms(datetime(2026, 10, 6, 14, 0, 0, 1500, tzinfo=UTC)) == int(WALL * 1000) + 2
+    assert to_ms(datetime(2026, 10, 6, 16, 0, 0, 1500, tzinfo=UTC)) == int(WALL * 1000) + 2
 
 
 class TestSamples:
@@ -89,6 +89,20 @@ class TestSamples:
             found = build_points(category("heartrate"), docs, NOW, live=True)
         assert found == []
         assert len(caplog.records) == 3
+
+    def test_samples_dated_in_the_future_are_dropped_with_one_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ahead = (NOW + timedelta(hours=2)).isoformat()
+        behind = (NOW - timedelta(minutes=5)).isoformat()
+        docs = [{"bpm": 60, "timestamp": ahead}, {"bpm": 61, "timestamp": behind}]
+        seen: set[tuple[str, str]] = set()
+        with caplog.at_level(logging.INFO):
+            first = build_points(category("heartrate"), docs, NOW, live=True, warned=seen)
+            second = build_points(category("heartrate"), docs, NOW, live=True, warned=seen)
+        assert [point.value for point in first if point.name == "oura_heartrate_bpm"] == [61.0]
+        assert first == second
+        assert len([r for r in caplog.records if "in the future" in r.message]) == 1
 
 
 class TestEvents:

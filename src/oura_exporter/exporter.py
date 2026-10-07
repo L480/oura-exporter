@@ -56,6 +56,7 @@ class Exporter:
         self._wall = wall
         self._states = {category.name: CategoryState() for category in self._categories}
         self._paused_until = 0.0
+        self._cycle_fetched = False
         self._warned: set[tuple[str, str]] = set()
 
         self.registry = CollectorRegistry()
@@ -139,6 +140,7 @@ class Exporter:
             logger.debug("paused after a rate limit; skipping this cycle")
             self._mark_not_refreshed(self._categories)
             return
+        self._cycle_fetched = False
         for index, category in enumerate(self._categories):
             if stop is not None and stop.is_set():
                 return
@@ -173,6 +175,9 @@ class Exporter:
             self._failed(category, state, "auth", now, exc)
             return False
         except OuraApiError as exc:
+            if exc.reason == "auth" and self._cycle_fetched:
+                self._failed(category, state, "forbidden", now, exc)
+                return True
             self._failed(category, state, exc.reason, now, exc)
             if exc.reason == "auth":
                 self._auth_ok.set(0)
@@ -183,6 +188,7 @@ class Exporter:
                 logger.exception("%s: unexpected error while fetching", category.name)
             self._failed(category, state, "internal", now, exc)
             return True
+        self._cycle_fetched = True
         self._succeeded(category, state, now)
         self._deliver(category, state, points, cutoff, now)
         return True

@@ -20,7 +20,10 @@ SKIPPED_FIELDS = {
     ("ring_battery_level", "timestamp_unix"): "the same instant as timestamp, in milliseconds",
     ("sleep", "period"): "internal period identifier, not a measurement",
 }
-SCOPES_NOT_IN_SPEC = {"stress": "requested since 0.2.0, missing from the OpenAPI scope list"}
+SCOPES_NOT_IN_SPEC = {
+    "stress": "requested since 0.2.0, missing from the OpenAPI scope list",
+    "ring_configuration": "ring battery answers 401 without it, not in the OpenAPI scope list",
+}
 type Leaf = tuple[tuple[str, ...], str, str]
 
 
@@ -175,4 +178,6 @@ def test_default_scopes_are_known_scopes() -> None:
     )
     assert set(DEFAULT_SCOPES) <= spec_scopes | set(SCOPES_NOT_IN_SPEC)
     assert "email" not in DEFAULT_SCOPES
-    assert {"workout", "session", "tag", "heart_health"} <= set(DEFAULT_SCOPES)
+    assert {"workout", "session", "tag", "heart_health", "ring_configuration"} <= set(
+        DEFAULT_SCOPES
+    )

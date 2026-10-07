@@ -95,7 +95,7 @@ class FakeClock:
         self.now += seconds
 
 
-WALL = datetime(2026, 10, 6, 14, 0, tzinfo=UTC).timestamp()
+WALL = datetime(2026, 10, 6, 16, 0, tzinfo=UTC).timestamp()
 CATEGORY_ORDER = tuple(category.name for category in load_definitions())
 
 

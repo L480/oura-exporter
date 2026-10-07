@@ -97,8 +97,8 @@ class TestFullPoll:
     def test_request_window_follows_the_lookback(self, rig: Rig) -> None:
         rig.exporter.poll()
         params = rig.calls("heartrate")[0].request.params
-        assert params["start_datetime"] == "2026-10-03T14:00:00+00:00"
-        assert params["end_datetime"] == "2026-10-06T14:00:00+00:00"
+        assert params["start_datetime"] == "2026-10-03T16:00:00+00:00"
+        assert params["end_datetime"] == "2026-10-06T16:00:00+00:00"
         daily = rig.calls("daily_readiness")[0].request.params
         assert daily["start_date"] == "2026-10-03"
         assert daily["end_date"] == "2026-10-07"
@@ -421,6 +421,23 @@ class TestFailureIsolation:
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 1
 
+    def test_rejected_token_after_a_fetched_category_only_fails_that_category(
+        self, rig: Rig
+    ) -> None:
+        first, failing = CATEGORY_ORDER[:2]
+        rig.rsps.replace(responses.GET, api_url(failing), status=401)
+        rig.rsps.post(
+            TOKEN_URL,
+            json={"access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600},
+        )
+        rig.exporter.poll()
+        assert rig.value("oura_exporter_auth_ok") == 1
+        assert rig.up(first) == 1
+        assert rig.up(failing) == 0
+        assert error_reasons(rig, failing) == {"forbidden"}
+        rest = CATEGORY_ORDER[2:]
+        assert all(rig.up(name) == 1 for name in rest)
+
 
 class TestAbortedCycles:
     def limit(self, rig: Rig, endpoint: str, retry_after: int = 120) -> None:
@@ -489,7 +506,7 @@ class TestAbortedCycles:
         assert error_reasons(rig, "personal_info") == set()
 
     def test_an_authentication_failure_marks_the_rest_of_the_cycle_down(self, rig: Rig) -> None:
-        fetched, failing, rest = CATEGORY_ORDER[:1], CATEGORY_ORDER[1], CATEGORY_ORDER[2:]
+        fetched, failing, rest = CATEGORY_ORDER[:0], CATEGORY_ORDER[0], CATEGORY_ORDER[1:]
         assert set(rest) >= SINGLES
         rig.exporter.poll()
         rig.advance(300)

@@ -192,7 +192,11 @@ groups:
 - Everything inside `OURA_LOOKBACK_DAYS` is read again in every poll, which costs one request
   per category and range. Raise `OURA_POLL_INTERVAL` before raising the lookback.
 - HTTP 403 means the scope was not granted or the Oura membership has expired. The category is
-  reported as `forbidden` and retried hourly.
+  reported as `forbidden` and retried hourly. HTTP 401 on one category after another category was
+  fetched in the same poll is treated the same way (Oura answers 401 for a missing scope); a 401
+  on the first category still counts as an authentication failure.
+- Samples dated more than a minute ahead of the clock are dropped, the first drop per category is
+  logged. Prometheus rejects them as out of bounds.
 - One exporter serves one Oura account. Run one instance per person, each with its own data
   directory and port.
 - The API is polled, webhooks are not used. Rate limits (HTTP 429) are respected through the
@@ -230,7 +234,7 @@ uv run --env-file .env oura-exporter
 - **Heart rate and ring battery** are every sample, not the most recent one.
   `oura_heartrate_source` is a number (1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout),
   not a state set.
-- **New scopes** `workout`, `session`, `tag` and `heart_health` are requested, so the stored
+- **New scopes** `workout`, `session`, `tag`, `heart_health` and `ring_configuration` are requested, so the stored
   token has to be authorized again (stop the service, `docker compose run --rm -it
   oura-exporter`). Without them only the new categories report `forbidden`.
 - **New data:** sleep series and nested readiness, daily activity MET and class series, workouts,
