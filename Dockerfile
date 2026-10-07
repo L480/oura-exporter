@@ -21,6 +21,10 @@ RUN groupadd --system --gid 6872 oura-exporter \
         --shell /usr/sbin/nologin oura-exporter \
     && install -d -m 0700 -o 6872 -g 6872 /data
 COPY --from=build /app/.venv /app/.venv
+# pip is not needed at runtime and its vendored libraries only trigger CVE findings.
+RUN rm -rf /usr/local/lib/python3.14/site-packages/pip* \
+    /usr/local/bin/pip* \
+    /usr/local/lib/python3.14/ensurepip/_bundled
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
