@@ -348,6 +348,15 @@ class TestExitCodes:
         assert "legacy-pat" not in caplog.text
         assert "OURA_CLIENT_SECRET" in caplog.text
 
+    def test_time_zone_and_http_warnings_are_logged_at_startup(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = base_env(tmp_path, TZ="Nowhere/Land", OURA_API_BASE_URL="http://127.0.0.1:9")
+        with caplog.at_level(logging.WARNING):
+            assert cli.main([], env) == 1
+        assert "TZ=Nowhere/Land is not a known time zone" in caplog.text
+        assert "OURA_API_BASE_URL uses plain http" in caplog.text
+
     def test_keyboard_interrupt_during_consent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -1,8 +1,10 @@
+import contextlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,19 @@ def _log_level(value: str) -> int:
         return levels[value.upper()]
     except KeyError:
         raise ConfigError(f"LOGLEVEL must be one of {', '.join(levels)}, got {value!r}") from None
+
+
+def _time_zone_warning(value: str) -> str | None:
+    name = value.removeprefix(":")
+    if any(char.isdigit() for char in name):
+        return None
+    with contextlib.suppress(ZoneInfoNotFoundError, ValueError):
+        ZoneInfo(name)
+        return None
+    return (
+        f"TZ={value} is not a known time zone; the C library falls back to UTC, "
+        'so "today" and the day timestamps use UTC'
+    )
 
 
 def parse_port(environ: Mapping[str, str]) -> int:
@@ -174,8 +189,18 @@ class Settings:
                 f"OURA_API_BASE_URL must not contain a query or fragment, got {api_base_url!r}"
             )
 
+        if base_parts.scheme == "http":
+            warnings.append(
+                "OURA_API_BASE_URL uses plain http; access tokens are sent unencrypted "
+                "(only use this for a local mock server)"
+            )
+
         log_value = _get(environ, "LOGLEVEL")
         log_level = logging.INFO if log_value is None else _log_level(log_value)
+
+        time_zone = _get(environ, "TZ")
+        if time_zone is not None and (message := _time_zone_warning(time_zone)) is not None:
+            warnings.append(message)
 
         if _get(environ, "OURA_ACCESS_TOKEN") is not None:
             warnings.append(

@@ -11,6 +11,18 @@ from oura_exporter.config import (
 )
 
 BASE = {"OURA_CLIENT_ID": "client"}
+WITH_SECRET = {**BASE, "OURA_CLIENT_SECRET": "secret"}
+HTTP_WARNING = (
+    "OURA_API_BASE_URL uses plain http; access tokens are sent unencrypted "
+    "(only use this for a local mock server)"
+)
+
+
+def time_zone_warning(value: str) -> str:
+    return (
+        f"TZ={value} is not a known time zone; the C library falls back to UTC, "
+        'so "today" and the day timestamps use UTC'
+    )
 
 
 def env(**extra: str) -> dict[str, str]:
@@ -92,7 +104,7 @@ def test_all_values() -> None:
     assert settings.port == 9100
     assert settings.listen_address == "127.0.0.1"
     assert settings.log_level == logging.DEBUG
-    assert settings.warnings == ()
+    assert settings.warnings == (HTTP_WARNING,)
 
 
 @pytest.mark.parametrize(
@@ -203,3 +215,62 @@ def test_parse_port_and_listen_address_work_standalone() -> None:
     assert parse_listen_address({"LISTEN_ADDRESS": " ::1 "}) == "::1"
     with pytest.raises(ConfigError, match="PORT"):
         parse_port({"PORT": "x"})
+
+
+@pytest.mark.parametrize(
+    "value", ["UTC", "Europe/Berlin", ":Europe/Berlin", "Asia/Tokyo", "  America/New_York \n"]
+)
+def test_known_time_zone_names_do_not_warn(value: str) -> None:
+    assert Settings.from_env({**WITH_SECRET, "TZ": value}).warnings == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["UTC0", "CET-1CEST,M3.5.0,M10.5.0/3", "EST5EDT", "<+03>-3", ":UTC0", "JST-9", "Etc/GMT+1"],
+)
+def test_posix_time_zone_strings_do_not_warn(value: str) -> None:
+    assert Settings.from_env({**WITH_SECRET, "TZ": value}).warnings == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Mars/Phobos", "Berlin", ":Nope/Zone", "Europe", "../etc/passwd", "/etc/localtime", ":"],
+)
+def test_unknown_time_zones_warn(value: str) -> None:
+    settings = Settings.from_env({**WITH_SECRET, "TZ": value})
+    assert settings.warnings == (time_zone_warning(value),)
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_time_zone_counts_as_unset(value: str) -> None:
+    assert Settings.from_env({**WITH_SECRET, "TZ": value}).warnings == ()
+
+
+def test_unknown_time_zone_is_reported_as_written_without_whitespace() -> None:
+    settings = Settings.from_env({**WITH_SECRET, "TZ": "  :Nowhere/Land \n"})
+    assert settings.warnings == (time_zone_warning(":Nowhere/Land"),)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://127.0.0.1:9", "HTTP://example.org", "http://mock:8080/base/"]
+)
+def test_plain_http_api_base_url_warns(url: str) -> None:
+    settings = Settings.from_env({**WITH_SECRET, "OURA_API_BASE_URL": url})
+    assert settings.warnings == (HTTP_WARNING,)
+
+
+@pytest.mark.parametrize("url", ["https://api.ouraring.com", "https://oura.test/", "HTTPS://x.org"])
+def test_https_api_base_url_does_not_warn(url: str) -> None:
+    assert Settings.from_env({**WITH_SECRET, "OURA_API_BASE_URL": url}).warnings == ()
+
+
+def test_warnings_accumulate_without_duplicates() -> None:
+    settings = Settings.from_env(
+        env(OURA_ACCESS_TOKEN="pat", TZ="Nowhere", OURA_API_BASE_URL="http://127.0.0.1:9")
+    )
+    assert len(settings.warnings) == 4
+    assert len(set(settings.warnings)) == 4
+    assert HTTP_WARNING in settings.warnings
+    assert time_zone_warning("Nowhere") in settings.warnings
+    assert any("OURA_CLIENT_SECRET" in warning for warning in settings.warnings)
+    assert any("OURA_ACCESS_TOKEN" in warning for warning in settings.warnings)
