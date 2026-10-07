@@ -87,7 +87,8 @@ jobs:
       - name: Smoke test without a token
         run: |
           code=0
-          output=$(docker run --rm --name oura-exporter-ci-notoken -e OURA_CLIENT_ID=ci oura-exporter:ci 2>&1) || code=$?
+          output=$(docker run --rm --name oura-exporter-ci-notoken -e OURA_CLIENT_ID=ci \
+            -e OURA_REMOTE_WRITE_URL=http://127.0.0.1:9/api/v1/write oura-exporter:ci 2>&1) || code=$?
           echo "${output}"
           test "${code}" = "1"
           grep -q 'https://cloud.ouraring.com/oauth/authorize' <<< "${output}"
@@ -102,6 +103,7 @@ jobs:
             --read-only --cap-drop=ALL --security-opt no-new-privileges \
             -p 8000:8000 -v "${data}:/data" \
             -e OURA_CLIENT_ID=ci -e OURA_API_BASE_URL=http://127.0.0.1:9 \
+            -e OURA_REMOTE_WRITE_URL=http://127.0.0.1:9/api/v1/write \
             oura-exporter:ci
           for _ in $(seq 1 30); do
             curl -fsS http://localhost:8000/metrics > metrics.txt || true

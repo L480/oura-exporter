@@ -1,7 +1,7 @@
 [project]
 name = "oura-exporter"
-version = "0.2.0"
-description = "Prometheus exporter for Oura Ring data"
+version = "0.3.0"
+description = "Pushes Oura Ring data to Prometheus via remote write"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
