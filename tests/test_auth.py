@@ -49,8 +49,10 @@ class Env:
             {
                 "OURA_CLIENT_ID": CLIENT_ID,
                 "OURA_CLIENT_SECRET": SECRET,
+                "OURA_REMOTE_WRITE_URL": "http://prometheus.test/api/v1/write",
                 "OURA_REDIRECT_URI": REDIRECT,
                 "OURA_TOKEN_PATH": str(self.store.token_path),
+                "OURA_SCOPES": " ".join(SCOPES),
                 **extra,
             }
         )

@@ -26,7 +26,7 @@ from oura_exporter.auth import AUTHORIZE_URL, ConsentRequired
 from oura_exporter.exporter import Exporter
 from oura_exporter.storage import TokenStore
 
-from .helpers import BASE_URL, register_endpoints
+from .helpers import BASE_URL, WRITE_URL, decode_write_request, register_endpoints
 
 ROOT = Path(__file__).resolve().parents[1]
 WILDCARD = "0.0.0.0"  # noqa: S104
@@ -91,6 +91,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     return {
         "OURA_CLIENT_ID": "cid",
         "OURA_CLIENT_SECRET": "secret",
+        "OURA_REMOTE_WRITE_URL": "http://prometheus.test/api/v1/write",
         "OURA_TOKEN_PATH": str(tmp_path / "data" / "oauth_token.json"),
         **extra,
     }
@@ -409,6 +410,7 @@ class TestRun:
     ) -> tuple[int, str, int]:
         seed_token(tmp_path / "data")
         register_endpoints(rsps)
+        rsps.add(responses.POST, WRITE_URL, status=204)
         port = free_port()
         env = base_env(
             tmp_path,
@@ -461,8 +463,14 @@ class TestRun:
             code, body, port = self.run_service(tmp_path, rsps, monkeypatch, signal_number)
         assert code == 0
         assert "oura_exporter_build_info" in body
-        assert "oura_daily_activity_score 78.0" in body
+        assert "oura_daily_activity_score" not in body
         assert 'oura_exporter_category_up{category="daily_activity"} 1.0' in body
+        pushed = [
+            decode_write_request(call.request.body)
+            for call in rsps.calls
+            if call.request.url == WRITE_URL
+        ]
+        assert any(name == "oura_daily_activity_score" for request in pushed for name, _ in request)
         assert "serving metrics" in caplog.text
         assert "stopped" in caplog.text
         with (

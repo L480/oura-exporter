@@ -25,7 +25,15 @@ def categories(*raw: dict[str, Any]) -> tuple[Category, ...]:
 
 
 def category(name: str, kind: str, metrics: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
-    return {"name": name, "kind": kind, "prefix": f"oura_{name}_", "metrics": metrics, **extra}
+    time = {"time_path": "start"} if kind == "event" else {}
+    return {
+        "name": name,
+        "kind": kind,
+        "prefix": f"oura_{name}_",
+        "metrics": metrics,
+        **time,
+        **extra,
+    }
 
 
 def test_the_readme_metric_list_is_current() -> None:
@@ -64,16 +72,31 @@ class TestRenderMetricList:
     def test_one_bullet_per_category_in_yaml_order(self) -> None:
         listed = categories(
             category("zebra", "daily", [{"name": "b", "help": "B."}, {"name": "a", "help": "A."}]),
-            category("alpha", "latest", [{"name": "c", "help": "C."}]),
+            category("alpha", "sample", [{"name": "c", "help": "C."}]),
         )
         assert render_metric_list(listed) == (
-            "- **Zebra** · `oura_zebra_*` · latest day<br>\n"
-            "  `b`, `a`, `timestamp_seconds`\n"
-            "- **Alpha** · `oura_alpha_*` · most recent sample<br>\n"
-            "  `c`, `timestamp_seconds`"
+            "- **Zebra** · `oura_zebra_*` · daily value<br>\n"
+            "  `b`, `a`\n"
+            "- **Alpha** · `oura_alpha_*` · every sample<br>\n"
+            "  `c`"
         )
 
-    def test_timestamp_is_last_and_missing_for_single_documents(self) -> None:
+    def test_series_and_durations_follow_the_metrics(self) -> None:
+        listed = categories(
+            category(
+                "span",
+                "event",
+                [{"name": "kcal", "help": "K."}],
+                time_path="start",
+                end_path="end",
+                series=[{"name": "hr", "type": "samples", "help": "H."}],
+            )
+        )
+        assert render_metric_list(listed) == (
+            "- **Span** · `oura_span_*` · every event<br>\n  `kcal`, `hr`, `duration_seconds`"
+        )
+
+    def test_single_documents_list_only_their_metrics(self) -> None:
         listed = categories(
             category("profile", "single", [{"name": "age", "help": "Age."}]),
         )
@@ -89,10 +112,8 @@ class TestRenderMetricList:
                 [
                     {"name": "level", "help": "L.", "mapping": {"low": 1, "mid": 2, "high": 5}},
                     {"name": "summary", "help": "S.", "mapping": {"a": 1, "b": 2, "c": 3}},
-                    {"name": "source", "help": "S.", "type": "enum", "states": ["x", "y"]},
                     {"name": "sex", "help": "S.", "type": "info"},
                     {"name": "plain", "help": "P."},
-                    {"name": "when", "help": "W.", "transform": "timestamp"},
                 ],
                 title="Mixed bag",
                 summary="whenever",
@@ -100,8 +121,7 @@ class TestRenderMetricList:
         )
         assert render_metric_list(listed) == (
             "- **Mixed bag** · `oura_mixed_*` · whenever<br>\n"
-            "  `level (1-5)`, `summary (1-3)`, `source (state set)`, `sex_info`, `plain`, `when`, "
-            "`timestamp_seconds`"
+            "  `level (1-5)`, `summary (1-3)`, `sex_info`, `plain`"
         )
 
     def test_fractional_mappings_keep_their_decimals(self) -> None:
@@ -138,8 +158,9 @@ class TestRenderMetricList:
                 for metric in definition.metrics
                 if not metric.name.startswith("contributors_")
             ]
-            if definition.timestamp_name is not None:
-                expected.append("timestamp_seconds")
+            expected += [series.name for series in definition.series]
+            if definition.duration_name is not None:
+                expected.append("duration_seconds")
             assert listed == expected, definition.name
             assert listed_contributors == [
                 metric.name.removeprefix("contributors_")
@@ -161,8 +182,8 @@ class TestRenderMetricList:
             )
         )
         assert render_metric_list(listed) == (
-            "- **Zebra** · `oura_zebra_*` · latest day<br>\n"
-            "  `score`, `timestamp_seconds`<br>\n"
+            "- **Zebra** · `oura_zebra_*` · daily value<br>\n"
+            "  `score`<br>\n"
             "  contributors (`contributors_*`): `a`, `b`"
         )
 
@@ -170,7 +191,7 @@ class TestRenderMetricList:
         listed = categories(
             category(
                 "mixed",
-                "latest",
+                "sample",
                 [
                     {"name": "contributors_x", "help": "X."},
                     {"name": "level", "help": "L.", "mapping": {"a": 1, "b": 3}},
@@ -180,12 +201,12 @@ class TestRenderMetricList:
             )
         )
         assert render_metric_list(listed) == (
-            "- **Mixed** · `oura_mixed_*` · most recent sample<br>\n"
-            "  `level (1-3)`, `top_contributors`, `timestamp_seconds`<br>\n"
+            "- **Mixed** · `oura_mixed_*` · every sample<br>\n"
+            "  `level (1-3)`, `top_contributors`<br>\n"
             "  contributors (`contributors_*`): `x`, `grade (2-4)`"
         )
 
-    def test_single_documents_have_no_timestamp_but_may_have_contributors(self) -> None:
+    def test_single_documents_may_have_contributors(self) -> None:
         listed = categories(
             category(
                 "profile",
@@ -208,8 +229,8 @@ class TestRenderMetricList:
         rendered = render_metric_list(load_definitions())
         for line in rendered.split("\n"):
             if line.lstrip().startswith("`") and "<br>" not in line:
-                assert "contributors" not in line
-        assert "- **Heart rate** · `oura_heartrate_*` · most recent sample<br>\n  `bpm`" in rendered
+                assert "contributors (" not in line
+        assert "- **Heart rate** · `oura_heartrate_*` · every sample<br>\n  `bpm`" in rendered
 
     def test_no_categories(self) -> None:
         assert render_metric_list([]) == ""

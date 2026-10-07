@@ -9,10 +9,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 logger = logging.getLogger(__name__)
 
 DEFAULT_REDIRECT_URI = "http://localhost:8000/callback"
-DEFAULT_SCOPES = ("personal", "daily", "heartrate", "spo2", "stress")
+DEFAULT_SCOPES = (
+    "personal",
+    "daily",
+    "heartrate",
+    "spo2",
+    "stress",
+    "workout",
+    "session",
+    "tag",
+    "heart_health",
+)
 DEFAULT_TOKEN_PATH = "~/.config/oura-exporter/oauth_token.json"  # noqa: S105
 DEFAULT_API_BASE_URL = "https://api.ouraring.com"
 DEFAULT_POLL_INTERVAL = 300
+DEFAULT_LOOKBACK_DAYS = 3
 MIN_POLL_INTERVAL = 60
 DEFAULT_PORT = 8000
 DEFAULT_LISTEN_ADDRESS = "0.0.0.0"  # noqa: S104
@@ -98,6 +109,10 @@ class Settings:
     auth_code: str | None
     auth_code_file: Path | None
     poll_interval: int
+    lookback_days: int
+    remote_write_url: str | None
+    remote_write_username: str | None
+    remote_write_password: str | None
     metrics_config: Path | None
     api_base_url: str
     port: int
@@ -133,7 +148,7 @@ class Settings:
         return text or None
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str]) -> Settings:
+    def from_env(cls, environ: Mapping[str, str], *, remote_write: bool = True) -> Settings:
         warnings: list[str] = []
 
         client_id = _get(environ, "OURA_CLIENT_ID")
@@ -178,6 +193,33 @@ class Settings:
             else _integer("OURA_POLL_INTERVAL", poll_value, MIN_POLL_INTERVAL)
         )
 
+        lookback_value = _get(environ, "OURA_LOOKBACK_DAYS")
+        lookback_days = (
+            DEFAULT_LOOKBACK_DAYS
+            if lookback_value is None
+            else _integer("OURA_LOOKBACK_DAYS", lookback_value, 1)
+        )
+
+        remote_write_url = _get(environ, "OURA_REMOTE_WRITE_URL")
+        if remote_write_url is None:
+            if remote_write:
+                raise ConfigError("OURA_REMOTE_WRITE_URL is required")
+        else:
+            remote_write_url = _http_url("OURA_REMOTE_WRITE_URL", remote_write_url)
+        username = _get(environ, "OURA_REMOTE_WRITE_USERNAME")
+        password = _get(environ, "OURA_REMOTE_WRITE_PASSWORD")
+        password_file = _get(environ, "OURA_REMOTE_WRITE_PASSWORD_FILE")
+        if password is not None and password_file is not None:
+            raise ConfigError(
+                "set only one of OURA_REMOTE_WRITE_PASSWORD and OURA_REMOTE_WRITE_PASSWORD_FILE"
+            )
+        if password_file is not None:
+            password = _read_file("OURA_REMOTE_WRITE_PASSWORD_FILE", Path(password_file))
+        if (password is not None) != (username is not None):
+            raise ConfigError(
+                "OURA_REMOTE_WRITE_USERNAME and OURA_REMOTE_WRITE_PASSWORD(_FILE) go together"
+            )
+
         metrics_config = _get(environ, "OURA_METRICS_CONFIG")
 
         api_base_url = _http_url(
@@ -217,6 +259,10 @@ class Settings:
             auth_code=auth_code,
             auth_code_file=Path(auth_code_file) if auth_code_file is not None else None,
             poll_interval=poll_interval,
+            lookback_days=lookback_days,
+            remote_write_url=remote_write_url,
+            remote_write_username=username,
+            remote_write_password=password,
             metrics_config=Path(metrics_config) if metrics_config is not None else None,
             api_base_url=api_base_url.rstrip("/"),
             port=parse_port(environ),

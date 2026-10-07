@@ -1,9 +1,9 @@
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, datetime, timedelta
 
 from prometheus_client import (
     CollectorRegistry,
@@ -12,74 +12,23 @@ from prometheus_client import (
     PlatformCollector,
     ProcessCollector,
 )
-from prometheus_client.metrics_core import (
-    GaugeMetricFamily,
-    InfoMetricFamily,
-    StateSetMetricFamily,
-)
-from prometheus_client.metrics_core import Metric as MetricFamily
 
 from oura_exporter import __version__
-from oura_exporter.api import Document, OuraApiError, OuraClient, RateLimitedError
+from oura_exporter.api import OuraApiError, OuraClient, RateLimitedError
 from oura_exporter.auth import AuthError, TokenManager
-from oura_exporter.definitions import Category, Metric, Snapshot, build_snapshot
+from oura_exporter.definitions import Category
+from oura_exporter.fetching import DocumentFetcher
+from oura_exporter.points import DeliveryLog, Point, build_points
+from oura_exporter.remote_write import RemoteWriter
 
 logger = logging.getLogger(__name__)
 
 FORBIDDEN_RETRY_SECONDS = 3600.0
-FIELDS_REJECTED_STATUS = frozenset({400, 422})
-
-
-def _family(metric: Metric, value: float | str) -> MetricFamily:
-    if metric.type == "enum":
-        return StateSetMetricFamily(
-            metric.full_name, metric.help, {state: state == value for state in metric.states}
-        )
-    if metric.type == "info":
-        return InfoMetricFamily(metric.full_name, metric.help, {metric.name: str(value)})
-    return GaugeMetricFamily(metric.full_name, metric.help, float(value))
-
-
-def _timestamp_help(category: Category) -> str:
-    if category.kind == "daily":
-        return "Local midnight of the day of the exported document, Unix time in seconds."
-    return "Time of the exported sample, Unix time in seconds."
-
-
-class OuraCollector:
-    def __init__(self, categories: Sequence[Category]) -> None:
-        self._categories = tuple(categories)
-        self._snapshots: dict[str, Snapshot] = {}
-        self._lock = threading.Lock()
-
-    def update(self, category: str, snapshot: Snapshot) -> None:
-        with self._lock:
-            self._snapshots[category] = snapshot
-
-    def describe(self) -> list[MetricFamily]:
-        return []
-
-    def collect(self) -> Iterator[MetricFamily]:
-        with self._lock:
-            snapshots = dict(self._snapshots)
-        for category in self._categories:
-            snapshot = snapshots.get(category.name)
-            if snapshot is None:
-                continue
-            for metric in category.metrics:
-                value = snapshot.values.get(metric.name)
-                if value is not None:
-                    yield _family(metric, value)
-            if snapshot.timestamp is not None and category.timestamp_name is not None:
-                yield GaugeMetricFamily(
-                    category.timestamp_name, _timestamp_help(category), snapshot.timestamp
-                )
 
 
 @dataclass(slots=True)
 class CategoryState:
     next_due: float = 0.0
-    send_fields: bool = True
     failure: str | None = None
 
 
@@ -89,26 +38,27 @@ class Exporter:
         client: OuraClient,
         tokens: TokenManager,
         categories: Sequence[Category],
+        writer: RemoteWriter,
         poll_interval: float,
+        lookback_days: int,
         *,
         monotonic: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
-        today: Callable[[], date] = date.today,
     ) -> None:
-        self._client = client
+        self._fetcher = DocumentFetcher(client)
+        self._writer = writer
+        self._lookback = timedelta(days=lookback_days)
+        self._log = DeliveryLog()
         self._tokens = tokens
         self._categories = tuple(categories)
         self._poll_interval = poll_interval
         self._monotonic = monotonic
         self._wall = wall
-        self._today = today
         self._states = {category.name: CategoryState() for category in self._categories}
         self._paused_until = 0.0
         self._warned: set[tuple[str, str]] = set()
 
         self.registry = CollectorRegistry()
-        self._collector = OuraCollector(self._categories)
-        self.registry.register(self._collector)
         ProcessCollector(registry=self.registry)
         PlatformCollector(registry=self.registry)
 
@@ -147,6 +97,32 @@ class Exporter:
             ["category", "reason"],
             registry=self.registry,
         )
+        self._samples = Counter(
+            "oura_exporter_remote_write_samples",
+            "Samples pushed by result: sent, or rejected by the receiver (a batch answered "
+            "with HTTP 400 counts as rejected).",
+            ["result"],
+            registry=self.registry,
+        )
+        for result in ("sent", "rejected"):
+            self._samples.labels(result)
+        self._failures = Counter(
+            "oura_exporter_remote_write_failures",
+            "Failed remote write requests by reason, retried in the next cycle.",
+            ["reason"],
+            registry=self.registry,
+        )
+        self._revisions = Counter(
+            "oura_exporter_sample_revisions",
+            "Samples whose value changed after they were delivered; the receiver keeps the "
+            "first value.",
+            registry=self.registry,
+        )
+        self._write_success = Gauge(
+            "oura_exporter_remote_write_last_success_timestamp_seconds",
+            "Unix time of the last successful remote write request.",
+            registry=self.registry,
+        )
 
     def run(self, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -181,8 +157,13 @@ class Exporter:
                 self._up.labels(category.name).set(0)
 
     def _poll_category(self, category: Category, state: CategoryState, now: float) -> bool:
+        moment = datetime.fromtimestamp(self._wall(), tz=UTC)
+        cutoff = moment - self._lookback
         try:
-            snapshot = self._fetch(category, state)
+            documents = self._fetcher.fetch(category, cutoff, moment)
+            points = build_points(
+                category, documents, moment, live=True, cutoff=cutoff, warned=self._warned
+            )
         except RateLimitedError as exc:
             self._paused_until = now + exc.retry_after
             self._failed(category, state, "rate_limited", now, exc)
@@ -202,43 +183,33 @@ class Exporter:
                 logger.exception("%s: unexpected error while fetching", category.name)
             self._failed(category, state, "internal", now, exc)
             return True
-        self._succeeded(category, state, snapshot, now)
+        self._succeeded(category, state, now)
+        self._deliver(category, state, points, cutoff, now)
         return True
 
-    def _fetch(self, category: Category, state: CategoryState) -> Snapshot:
-        if category.kind == "single":
-            documents = [self._client.get_document(category.endpoint)]
-        else:
-            documents = self._fetch_documents(category, state)
-        return build_snapshot(category, documents, self._warned)
-
-    def _fetch_documents(self, category: Category, state: CategoryState) -> list[Document]:
-        today = self._today()
-        if state.send_fields:
-            try:
-                return self._client.get_documents(category.endpoint, category.params(today))
-            except OuraApiError as exc:
-                if exc.status_code not in FIELDS_REJECTED_STATUS:
-                    raise
-                rejected = exc.status_code
-            documents = self._client.get_documents(
-                category.endpoint, category.params(today, with_fields=False)
-            )
-            state.send_fields = False
-            logger.warning(
-                "%s: Oura rejected the fields parameter (HTTP %s); not sending it again",
-                category.name,
-                rejected,
-            )
-            return documents
-        return self._client.get_documents(
-            category.endpoint, category.params(today, with_fields=False)
-        )
-
-    def _succeeded(
-        self, category: Category, state: CategoryState, snapshot: Snapshot, now: float
+    def _deliver(
+        self,
+        category: Category,
+        state: CategoryState,
+        points: Sequence[Point],
+        cutoff: datetime,
+        now: float,
     ) -> None:
-        self._collector.update(category.name, snapshot)
+        fresh = self._log.fresh(points)
+        if fresh:
+            delivery = self._writer.send(fresh)
+            self._revisions.inc(self._log.record(delivery.delivered))
+            self._samples.labels("sent").inc(delivery.sent)
+            self._samples.labels("rejected").inc(delivery.rejected)
+            if delivery.delivered and self._writer.last_success is not None:
+                self._write_success.set(self._writer.last_success)
+            if delivery.failure is not None:
+                self._failures.labels(delivery.failure).inc()
+                state.next_due = now
+        self._log.prune(cutoff)
+        logger.debug("%s: %d samples in the window, %d new", category.name, len(points), len(fresh))
+
+    def _succeeded(self, category: Category, state: CategoryState, now: float) -> None:
         self._up.labels(category.name).set(1)
         self._last_success.labels(category.name).set(self._wall())
         self._auth_ok.set(1)
@@ -246,8 +217,6 @@ class Exporter:
         if state.failure is not None:
             logger.info("%s: recovered after %s failure", category.name, state.failure)
             state.failure = None
-        else:
-            logger.debug("%s: updated, %d series", category.name, len(snapshot.values))
 
     def _failed(
         self, category: Category, state: CategoryState, reason: str, now: float, exc: Exception

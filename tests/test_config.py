@@ -10,7 +10,7 @@ from oura_exporter.config import (
     parse_port,
 )
 
-BASE = {"OURA_CLIENT_ID": "client"}
+BASE = {"OURA_CLIENT_ID": "client", "OURA_REMOTE_WRITE_URL": "http://prom:9090/api/v1/write"}
 WITH_SECRET = {**BASE, "OURA_CLIENT_SECRET": "secret"}
 HTTP_WARNING = (
     "OURA_API_BASE_URL uses plain http; access tokens are sent unencrypted "
@@ -34,7 +34,21 @@ def test_defaults() -> None:
     assert settings.client_id == "client"
     assert settings.client_secret is None
     assert settings.redirect_uri == "http://localhost:8000/callback"
-    assert settings.scopes == ("personal", "daily", "heartrate", "spo2", "stress")
+    assert settings.scopes == (
+        "personal",
+        "daily",
+        "heartrate",
+        "spo2",
+        "stress",
+        "workout",
+        "session",
+        "tag",
+        "heart_health",
+    )
+    assert settings.lookback_days == 3
+    assert settings.remote_write_url == "http://prom:9090/api/v1/write"
+    assert settings.remote_write_username is None
+    assert settings.remote_write_password is None
     assert settings.token_path == Path("~/.config/oura-exporter/oauth_token.json").expanduser()
     assert settings.auth_code is None
     assert settings.auth_code_file is None
@@ -56,6 +70,10 @@ def test_values_are_stripped_and_empty_means_unset() -> None:
     settings = Settings.from_env(
         {
             "OURA_CLIENT_ID": "  client \n",
+            "OURA_REMOTE_WRITE_URL": " http://prom:9090/api/v1/write ",
+            "OURA_LOOKBACK_DAYS": " ",
+            "OURA_REMOTE_WRITE_USERNAME": "",
+            "OURA_REMOTE_WRITE_PASSWORD": " ",
             "OURA_REDIRECT_URI": "   ",
             "PORT": "",
             "OURA_POLL_INTERVAL": " ",
@@ -65,6 +83,10 @@ def test_values_are_stripped_and_empty_means_unset() -> None:
         }
     )
     assert settings.client_id == "client"
+    assert settings.remote_write_url == "http://prom:9090/api/v1/write"
+    assert settings.lookback_days == 3
+    assert settings.remote_write_username is None
+    assert settings.remote_write_password is None
     assert settings.redirect_uri == "http://localhost:8000/callback"
     assert settings.port == 8000
     assert settings.poll_interval == 300
@@ -77,6 +99,10 @@ def test_all_values() -> None:
     settings = Settings.from_env(
         {
             "OURA_CLIENT_ID": "id",
+            "OURA_REMOTE_WRITE_URL": "https://mimir.example.org/api/v1/push",
+            "OURA_REMOTE_WRITE_USERNAME": "writer",
+            "OURA_REMOTE_WRITE_PASSWORD": " hunter2 ",
+            "OURA_LOOKBACK_DAYS": "7",
             "OURA_CLIENT_SECRET": " s3cret ",
             "OURA_REDIRECT_URI": "https://example.org/cb",
             "OURA_SCOPES": "email  daily\tspo2 daily",
@@ -91,6 +117,10 @@ def test_all_values() -> None:
         }
     )
     assert settings.client_secret == "s3cret"
+    assert settings.remote_write_url == "https://mimir.example.org/api/v1/push"
+    assert settings.remote_write_username == "writer"
+    assert settings.remote_write_password == "hunter2"
+    assert settings.lookback_days == 7
     assert settings.redirect_uri == "https://example.org/cb"
     assert settings.scopes == ("email", "daily", "spo2")
     assert settings.token_path == Path("/data/token.json")
@@ -112,6 +142,26 @@ def test_all_values() -> None:
     [
         ({}, "OURA_CLIENT_ID"),
         ({"OURA_CLIENT_ID": "  "}, "OURA_CLIENT_ID"),
+        ({"OURA_CLIENT_ID": "id"}, "OURA_REMOTE_WRITE_URL is required"),
+        (env(OURA_REMOTE_WRITE_URL="prometheus:9090"), "OURA_REMOTE_WRITE_URL"),
+        (env(OURA_REMOTE_WRITE_URL="ftp://prometheus/write"), "OURA_REMOTE_WRITE_URL"),
+        (env(OURA_LOOKBACK_DAYS="0"), "OURA_LOOKBACK_DAYS"),
+        (env(OURA_LOOKBACK_DAYS="-2"), "OURA_LOOKBACK_DAYS"),
+        (env(OURA_LOOKBACK_DAYS="three"), "OURA_LOOKBACK_DAYS"),
+        (env(OURA_REMOTE_WRITE_USERNAME="u"), "go together"),
+        (env(OURA_REMOTE_WRITE_PASSWORD="p"), "go together"),
+        (
+            env(
+                OURA_REMOTE_WRITE_USERNAME="u",
+                OURA_REMOTE_WRITE_PASSWORD="p",
+                OURA_REMOTE_WRITE_PASSWORD_FILE="/x",
+            ),
+            "OURA_REMOTE_WRITE_PASSWORD_FILE",
+        ),
+        (
+            env(OURA_REMOTE_WRITE_USERNAME="u", OURA_REMOTE_WRITE_PASSWORD_FILE="/does/not/exist"),
+            "OURA_REMOTE_WRITE_PASSWORD_FILE",
+        ),
         (env(OURA_CLIENT_SECRET="a", OURA_CLIENT_SECRET_FILE="/x"), "OURA_CLIENT_SECRET"),
         (env(OURA_AUTH_CODE="a", OURA_AUTH_CODE_FILE="/x"), "OURA_AUTH_CODE"),
         (env(OURA_CLIENT_SECRET_FILE="/does/not/exist"), "OURA_CLIENT_SECRET_FILE"),
@@ -274,3 +324,20 @@ def test_warnings_accumulate_without_duplicates() -> None:
     assert time_zone_warning("Nowhere") in settings.warnings
     assert any("OURA_CLIENT_SECRET" in warning for warning in settings.warnings)
     assert any("OURA_ACCESS_TOKEN" in warning for warning in settings.warnings)
+
+
+def test_the_remote_write_password_can_come_from_a_file(tmp_path: Path) -> None:
+    secret = tmp_path / "password"
+    secret.write_text("from-file\n", encoding="utf-8")
+    settings = Settings.from_env(
+        env(OURA_REMOTE_WRITE_USERNAME="writer", OURA_REMOTE_WRITE_PASSWORD_FILE=str(secret))
+    )
+    assert settings.remote_write_username == "writer"
+    assert settings.remote_write_password == "from-file"
+
+
+def test_the_remote_write_url_is_optional_for_commands_that_do_not_push() -> None:
+    settings = Settings.from_env({"OURA_CLIENT_ID": "client"}, remote_write=False)
+    assert settings.remote_write_url is None
+    configured = Settings.from_env(BASE, remote_write=False)
+    assert configured.remote_write_url == BASE["OURA_REMOTE_WRITE_URL"]

@@ -12,25 +12,25 @@ from prometheus_client import ProcessCollector
 from oura_exporter import __version__
 from oura_exporter import exporter as exporter_module
 from oura_exporter.definitions import load_definitions
-from oura_exporter.exporter import Exporter, OuraCollector
+from oura_exporter.exporter import Exporter
+from oura_exporter.remote_write import RemoteWriter
 from oura_exporter.storage import Token
 
 from .helpers import (
     CATEGORY_ORDER,
-    ENDPOINTS,
-    TODAY,
     TOKEN_URL,
     WALL,
+    WRITE_URL,
     Rig,
     api_url,
     build_rig,
     epoch,
     load_fixture,
     register_endpoint,
-    register_endpoints,
 )
 
-CATEGORIES = list(ENDPOINTS)
+CATEGORIES = list(CATEGORY_ORDER)
+SINGLES = {"personal_info", "ring_configuration"}
 
 
 def error_reasons(rig: Rig, category: str) -> set[str]:
@@ -55,156 +55,181 @@ def poll_records(caplog: pytest.LogCaptureFixture, level: int) -> list[logging.L
     ]
 
 
-class TestFullPoll:
-    def test_exports_every_category(self, rig: Rig) -> None:
-        rig.exporter.poll()
-        assert rig.value("oura_daily_activity_score") == 78
-        assert rig.value("oura_daily_activity_steps") == 8731
-        assert rig.value("oura_daily_activity_contributors_stay_active") == 61
-        assert rig.value("oura_daily_activity_timestamp_seconds") == epoch("2026-10-06T00:00:00Z")
-        assert rig.value("oura_daily_readiness_temperature_deviation_celsius") == -0.21
-        assert rig.value("oura_daily_resilience_level") == 3
-        assert rig.value("oura_daily_sleep_score") == 84
-        assert rig.value("oura_daily_spo2_average_percent") == 96.84
-        assert rig.value("oura_daily_stress_day_summary") == 2
-        assert rig.value("oura_sleep_total_sleep_duration_seconds") == 26040
-        assert rig.value("oura_heartrate_bpm") == 57
-        assert rig.value("oura_heartrate_timestamp_seconds") == epoch("2026-10-06T07:09:00Z")
-        assert rig.value("oura_ring_battery_level_percent") == 74
-        assert rig.value("oura_ring_battery_charging") == 0
-        assert rig.value("oura_personal_info_age_years") == 34
-        assert rig.value("oura_personal_info_timestamp_seconds") is None
-        assert "email" not in rig.text()
-        assert "person@example" not in rig.text()
+def sent(rig: Rig) -> float | None:
+    return rig.value("oura_exporter_remote_write_samples_total", result="sent")
 
-    def test_state_sets_and_info_metrics(self, rig: Rig) -> None:
+
+class TestFullPoll:
+    def test_polls_every_category_and_pushes_samples(self, rig: Rig) -> None:
         rig.exporter.poll()
-        states = ["awake", "rest", "sleep", "session", "live", "workout"]
-        for state in states:
-            expected = 1 if state == "rest" else 0
-            assert rig.value("oura_heartrate_source", oura_heartrate_source=state) == expected
-        assert rig.value("oura_personal_info_biological_sex_info", biological_sex="male") == 1
-        text = rig.text()
-        assert 'oura_heartrate_source{oura_heartrate_source="rest"} 1.0' in text
-        assert 'oura_personal_info_biological_sex_info{biological_sex="male"} 1.0' in text
-        assert "# TYPE oura_personal_info_biological_sex_info gauge" in text
+        assert all(rig.up(category) == 1 for category in CATEGORIES)
+        assert len(rig.rsps.calls) == len(CATEGORIES) + len(rig.writes())
+        assert rig.value("oura_exporter_auth_ok") == 1
+        assert sent(rig) == rig.pushed_count() > 0
+        assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
+
+    def test_data_is_not_exposed_on_metrics(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        names = {family.name for family in rig.exporter.registry.collect()}
+        assert not any(
+            name.startswith("oura_") and not name.startswith("oura_exporter_") for name in names
+        )
+
+    def test_samples_carry_their_measurement_time(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        heart = rig.pushed("oura_heartrate_bpm", job="oura-exporter")
+        assert [(ts / 1000, value) for ts, value in heart] == [
+            (epoch("2026-10-05T02:00:00+00:00"), 52.0),
+            (epoch("2026-10-06T06:59:00+00:00"), 64.0),
+            (epoch("2026-10-06T07:03:00+00:00"), 61.0),
+            (epoch("2026-10-06T07:09:00+00:00"), 57.0),
+        ]
+        start = epoch("2026-10-05T23:12:41+00:00")
+        hrv = rig.pushed("oura_sleep_hrv_milliseconds", sleep_type="long_sleep")
+        assert (int((start + 300) * 1000), 47.0) in hrv
+        score = rig.pushed("oura_daily_readiness_score")
+        assert [(ts / 1000, value) for ts, value in score] == [
+            (epoch("2026-10-04T23:59:59+00:00"), 74.0),
+            (epoch("2026-10-05T23:59:59+00:00"), 80.0),
+            (WALL, 86.0),
+        ]
+
+    def test_request_window_follows_the_lookback(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        params = rig.calls("heartrate")[0].request.params
+        assert params["start_datetime"] == "2026-10-03T14:00:00+00:00"
+        assert params["end_datetime"] == "2026-10-06T14:00:00+00:00"
+        daily = rig.calls("daily_readiness")[0].request.params
+        assert daily["start_date"] == "2026-10-03"
+        assert daily["end_date"] == "2026-10-07"
+        assert "fields" in daily
+
+    def test_single_documents_in_a_list_are_pushed_too(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        assert rig.pushed("oura_ring_size") == [(int(WALL * 1000), 9.0)]
+        assert rig.pushed("oura_personal_info_age_years") == [(int(WALL * 1000), 34.0)]
 
     def test_self_metrics(self, rig: Rig) -> None:
-        assert rig.value("oura_exporter_build_info", version=__version__) == 1
-        assert rig.value("oura_exporter_auth_ok") == 1
-        assert rig.value("oura_exporter_token_persisted") == 1
-        assert rig.up("daily_activity") is None
         rig.exporter.poll()
+        assert rig.value("oura_exporter_build_info", version=__version__) == 1
+        assert rig.value("oura_exporter_token_persisted") == 1
+        assert rig.value("oura_exporter_remote_write_last_success_timestamp_seconds") == WALL
+        assert rig.value("oura_exporter_sample_revisions_total") == 0
         for category in CATEGORIES:
-            assert rig.up(category) == 1
             assert (
                 rig.value(
                     "oura_exporter_category_last_success_timestamp_seconds", category=category
                 )
                 == WALL
             )
-        rig.tokens.persisted = False
-        assert rig.value("oura_exporter_token_persisted") == 0
 
-    def test_request_parameters(self, rig: Rig) -> None:
+    def test_an_empty_answer_counts_as_success(self, rig: Rig) -> None:
+        for endpoint in ("workout", "daily_stress"):
+            rig.rsps.replace(
+                responses.GET, api_url(endpoint), json={"data": [], "next_token": None}
+            )
         rig.exporter.poll()
-        assert len(rig.rsps.calls) == 10
-        activity = rig.calls("daily_activity")[0].request.params
-        assert activity["start_date"] == "2026-09-29"
-        assert activity["end_date"] == "2026-10-07"
-        assert "steps" in activity["fields"].split(",")
-        assert rig.calls("heartrate")[0].request.params["latest"] == "true"
-        assert rig.calls("personal_info")[0].request.params == {}
+        assert rig.up("workout") == 1
+        assert rig.pushed("oura_daily_stress_day_summary") == []
 
-    def test_collector_describes_nothing_and_registers_once(self) -> None:
-        collector = OuraCollector(load_definitions())
-        assert collector.describe() == []
-        assert list(collector.collect()) == []
 
-    def test_an_empty_answer_counts_as_success_and_clears_the_series(self, rig: Rig) -> None:
+class TestDeduplication:
+    def test_a_second_poll_at_the_same_time_sends_nothing(self, rig: Rig) -> None:
         rig.exporter.poll()
-        assert rig.value("oura_daily_activity_score") == 78
+        writes = len(rig.writes())
+        total = sent(rig)
+        rig.mono.advance(300)
+        rig.exporter.poll()
+        assert len(rig.writes()) == writes
+        assert sent(rig) == total
+
+    def test_later_polls_resend_only_fetch_time_samples(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        writes = len(rig.writes())
         rig.advance(300)
+        rig.exporter.poll()
+        later = rig.writes()[writes:]
+        timestamps = {ts for request in later for samples in request.values() for ts, _ in samples}
+        assert timestamps == {int((WALL + 300) * 1000)}
+        names = {name for request in later for name, _ in request}
+        assert "oura_daily_readiness_score" in names
+        assert "oura_heartrate_bpm" not in names
+        assert "oura_sleep_heart_rate_bpm" not in names
+        assert "oura_personal_info_age_years" not in names
+
+    def test_new_samples_appear_as_they_arrive(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        payload = load_fixture("heartrate")
+        payload["data"].append(
+            {"bpm": 70, "source": "live", "timestamp": "2026-10-06T07:30:00+00:00"}
+        )
+        rig.rsps.replace(responses.GET, api_url("heartrate"), json=payload)
+        rig.mono.advance(300)
+        rig.exporter.poll()
+        heart = rig.pushed("oura_heartrate_bpm")
+        assert heart[-1] == (int(epoch("2026-10-06T07:30:00+00:00") * 1000), 70.0)
+        assert len(heart) == 5
+
+    def test_revisions_are_sent_and_counted(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        payload = load_fixture("sleep")
+        payload["data"][1]["total_sleep_duration"] = 26100
+        rig.rsps.replace(responses.GET, api_url("sleep"), json=payload)
+        rig.mono.advance(300)
+        rig.exporter.poll()
+        assert rig.value("oura_exporter_sample_revisions_total") == 1
+        end = int(epoch("2026-10-06T06:58:41+00:00") * 1000)
+        revised = rig.pushed("oura_sleep_total_sleep_duration_seconds", sleep_type="long_sleep")
+        assert (end, 26100.0) in revised
+        rig.mono.advance(300)
+        rig.exporter.poll()
+        assert rig.value("oura_exporter_sample_revisions_total") == 1
+
+
+class TestRemoteWriteResults:
+    def test_a_rejected_batch_is_delivered_and_counted(self, rig: Rig) -> None:
         rig.rsps.replace(
-            responses.GET, api_url("daily_activity"), json={"data": [], "next_token": None}
+            responses.POST, WRITE_URL, status=400, body="duplicate sample for timestamp"
         )
         rig.exporter.poll()
-        assert rig.up("daily_activity") == 1
-        assert rig.value("oura_daily_activity_score") is None
-        assert rig.value("oura_daily_activity_timestamp_seconds") is None
-
-
-class TestSnapshots:
-    def test_null_fields_remove_previously_exported_series(self, rig: Rig) -> None:
+        assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") > 0
+        assert sent(rig) == 0
+        writes = len(rig.writes())
+        rig.mono.advance(300)
         rig.exporter.poll()
-        assert rig.value("oura_daily_activity_score") == 78
-        assert rig.value("oura_daily_sleep_score") == 84
-        assert rig.value("oura_ring_battery_charging") == 0
-        assert rig.value("oura_personal_info_age_years") == 34
-
-        rig.advance(3600)
-        register_endpoints(rig.rsps, nulls=True, replace=True)
-        rig.exporter.poll()
-
-        assert rig.value("oura_daily_activity_score") is None
-        assert rig.value("oura_daily_activity_contributors_stay_active") is None
-        assert rig.value("oura_daily_activity_steps") == 8731
-        assert rig.value("oura_daily_readiness_score") is None
-        assert rig.value("oura_daily_readiness_temperature_deviation_celsius") is None
-        assert rig.value("oura_daily_sleep_score") is None
-        assert rig.value("oura_daily_spo2_average_percent") is None
-        assert rig.value("oura_daily_stress_day_summary") is None
-        assert rig.value("oura_sleep_total_sleep_duration_seconds") is None
-        assert rig.value("oura_sleep_time_in_bed_seconds") == 28080
-        assert rig.value("oura_ring_battery_charging") is None
-        assert rig.value("oura_ring_battery_level_percent") == 74
-        assert rig.value("oura_personal_info_age_years") is None
-        assert rig.value("oura_personal_info_biological_sex_info", biological_sex="male") is None
+        assert len(rig.writes()) == writes
         assert all(rig.up(category) == 1 for category in CATEGORIES)
 
-    def test_failure_keeps_the_snapshot(self, rig: Rig) -> None:
+    def test_failed_pushes_are_retried_in_the_next_cycle(self, rig: Rig) -> None:
+        rig.rsps.replace(responses.POST, WRITE_URL, status=503, body="down")
         rig.exporter.poll()
-        first_success = rig.value(
-            "oura_exporter_category_last_success_timestamp_seconds", category="daily_activity"
+        assert rig.value("oura_exporter_remote_write_failures_total", reason="server_error") == len(
+            CATEGORIES
         )
-        rig.advance(300)
-        rig.rsps.replace(responses.GET, api_url("daily_activity"), status=500, body="boom")
-        rig.exporter.poll()
+        assert sent(rig) == 0
+        assert rig.value("oura_exporter_remote_write_last_success_timestamp_seconds") == 0
+        assert all(rig.up(category) == 1 for category in CATEGORIES)
 
-        assert rig.value("oura_daily_activity_score") == 78
-        assert rig.up("daily_activity") == 0
-        assert rig.errors("daily_activity", "http_error") == 1
-        assert (
-            rig.value(
-                "oura_exporter_category_last_success_timestamp_seconds", category="daily_activity"
-            )
-            == first_success
-        )
-        assert rig.up("daily_readiness") == 1
-
-        rig.advance(300)
+        rig.rsps.replace(responses.POST, WRITE_URL, status=204)
+        rig.mono.advance(1)
         rig.exporter.poll()
-        assert rig.errors("daily_activity", "http_error") == 2
+        assert {(ts, value) for ts, value in rig.pushed("oura_heartrate_bpm")} >= {
+            (int(epoch("2026-10-06T07:09:00+00:00") * 1000), 57.0)
+        }
+        assert len(rig.calls("personal_info")) == 2
+        assert set(rig.pushed("oura_personal_info_age_years")) == {(int(WALL * 1000), 34.0)}
+        assert rig.value("oura_exporter_remote_write_last_success_timestamp_seconds") == WALL
 
-        rig.advance(300)
-        register_endpoint(rig.rsps, "daily_activity", replace=True)
+    def test_network_errors_count_as_failures(self, rig: Rig) -> None:
+        rig.rsps.replace(responses.POST, WRITE_URL, body=requests.ConnectionError("down"))
         rig.exporter.poll()
-        assert rig.up("daily_activity") == 1
-        assert (
-            rig.value(
-                "oura_exporter_category_last_success_timestamp_seconds", category="daily_activity"
-            )
-            == first_success + 900
+        assert rig.value("oura_exporter_remote_write_failures_total", reason="network") == len(
+            CATEGORIES
         )
 
-    def test_successful_fetch_replaces_values(self, rig: Rig) -> None:
-        rig.exporter.poll()
-        rig.advance(300)
-        payload = load_fixture("daily_activity")
-        payload["data"][1]["score"] = 55
-        rig.rsps.replace(responses.GET, api_url("daily_activity"), json=payload)
-        rig.exporter.poll()
-        assert rig.value("oura_daily_activity_score") == 55
+    def test_health_series_exist_before_the_first_push(self, rig: Rig) -> None:
+        assert sent(rig) == 0
+        assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
 
 
 class TestScheduling:
@@ -269,7 +294,7 @@ class TestScheduling:
         register_endpoint(rig.rsps, first, replace=True)
         rig.advance(61)
         rig.exporter.poll()
-        assert len(rig.rsps.calls) == 1 + 10
+        assert len(rig.rsps.calls) - len(rig.writes()) == 1 + len(CATEGORIES)
         assert all(rig.up(category) == 1 for category in CATEGORIES)
 
     def test_poll_returns_when_asked_to_stop(self, rig: Rig) -> None:
@@ -280,15 +305,15 @@ class TestScheduling:
 
     def test_poll_stops_between_categories(self, rig: Rig) -> None:
         stop = threading.Event()
-        original = rig.exporter._fetch
+        original = rig.exporter._fetcher.fetch
 
         def fetch_then_stop(*args: Any) -> Any:
             stop.set()
             return original(*args)
 
-        rig.exporter._fetch = fetch_then_stop  # type: ignore[method-assign]
+        rig.exporter._fetcher.fetch = fetch_then_stop  # type: ignore[method-assign]
         rig.exporter.poll(stop)
-        assert len(rig.rsps.calls) == 1
+        assert len(rig.calls(CATEGORY_ORDER[0])) == 1
         assert rig.up(CATEGORY_ORDER[1]) is None
 
 
@@ -301,7 +326,8 @@ class TestFailureIsolation:
         assert rig.errors(broken, "invalid_response") == 1
         assert CATEGORY_ORDER.index(broken) < len(CATEGORY_ORDER) - 1
         assert all(rig.up(category) == 1 for category in CATEGORY_ORDER if category != broken)
-        assert len(rig.rsps.calls) == 10
+        assert rig.pushed("oura_daily_readiness_score") == []
+        assert rig.pushed("oura_daily_sleep_score") != []
 
     def test_network_errors_do_not_stop_the_other_categories(self, rig: Rig) -> None:
         failing = "daily_activity"
@@ -317,16 +343,15 @@ class TestFailureIsolation:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        real = exporter_module.build_snapshot
-
+        real = exporter_module.build_points
         failing = "daily_stress"
 
-        def explode(category: Any, documents: Any, warned: Any = None) -> Any:
+        def explode(category: Any, *args: Any, **kwargs: Any) -> Any:
             if category.name == failing:
                 raise RuntimeError("bug")
-            return real(category, documents, warned)
+            return real(category, *args, **kwargs)
 
-        monkeypatch.setattr(exporter_module, "build_snapshot", explode)
+        monkeypatch.setattr(exporter_module, "build_points", explode)
         with caplog.at_level(logging.DEBUG, logger="oura_exporter.exporter"):
             rig.exporter.poll()
             rig.advance(300)
@@ -429,17 +454,16 @@ class TestAbortedCycles:
         self, rig: Rig
     ) -> None:
         fetched, limited, rest = CATEGORY_ORDER[:2], CATEGORY_ORDER[2], CATEGORY_ORDER[3:]
-        assert "personal_info" in rest
+        assert set(rest) >= SINGLES
         rig.exporter.poll()
         rig.advance(300)
         self.limit(rig, limited)
         rig.exporter.poll()
         expected = dict.fromkeys(fetched, 1) | {limited: 0}
-        expected |= {category: 1 if category == "personal_info" else 0 for category in rest}
+        expected |= {category: 1 if category in SINGLES else 0 for category in rest}
         assert {category: rig.up(category) for category in CATEGORIES} == expected
         assert error_reasons(rig, limited) == {"rate_limited"}
         assert error_reasons(rig, rest[0]) == set()
-        assert rig.value("oura_daily_sleep_score") == 84
 
     def test_a_later_success_sets_every_category_up_again(self, rig: Rig) -> None:
         first = CATEGORY_ORDER[0]
@@ -466,7 +490,7 @@ class TestAbortedCycles:
 
     def test_an_authentication_failure_marks_the_rest_of_the_cycle_down(self, rig: Rig) -> None:
         fetched, failing, rest = CATEGORY_ORDER[:1], CATEGORY_ORDER[1], CATEGORY_ORDER[2:]
-        assert "personal_info" in rest
+        assert set(rest) >= SINGLES
         rig.exporter.poll()
         rig.advance(300)
         rig.rsps.replace(responses.GET, api_url(failing), status=401)
@@ -477,7 +501,7 @@ class TestAbortedCycles:
         rig.exporter.poll()
         assert rig.value("oura_exporter_auth_ok") == 0
         expected = dict.fromkeys(fetched, 1) | {failing: 0}
-        expected |= {category: 1 if category == "personal_info" else 0 for category in rest}
+        expected |= {category: 1 if category in SINGLES else 0 for category in rest}
         assert {category: rig.up(category) for category in CATEGORIES} == expected
         assert error_reasons(rig, failing) == {"auth"}
         assert error_reasons(rig, rest[0]) == set()
@@ -500,11 +524,6 @@ class TestStandardMetrics:
             "process_start_time_seconds",
         } <= names
         assert (rig.value("process_resident_memory_bytes") or 0) > 0
-
-    def test_oura_families_are_still_exposed(self, rig: Rig) -> None:
-        rig.exporter.poll()
-        names = {family.name for family in rig.exporter.registry.collect()}
-        assert {"oura_daily_activity_score", "oura_exporter_auth_ok"} <= names
 
 
 class TestLogging:
@@ -564,7 +583,7 @@ class TestFieldsFallback:
             responses.GET, api_url("daily_activity"), status=status, json={"detail": "x"}
         )
         register_endpoint(rig.rsps, "daily_activity")
-        with caplog.at_level(logging.WARNING, logger="oura_exporter.exporter"):
+        with caplog.at_level(logging.WARNING, logger="oura_exporter.fetching"):
             rig.exporter.poll()
             rig.advance(300)
             rig.exporter.poll()
@@ -574,9 +593,9 @@ class TestFieldsFallback:
         calls = rig.calls("daily_activity")
         assert [("fields" in call.request.params) for call in calls] == [True, False, False, False]
         assert rig.up("daily_activity") == 1
-        assert rig.value("oura_daily_activity_score") == 78
+        assert rig.pushed("oura_daily_activity_score")[-1][1] == 78
         assert rig.errors("daily_activity", "http_error") is None
-        warnings = poll_records(caplog, logging.WARNING)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "fields" in warnings[0].getMessage()
         assert str(status) in warnings[0].getMessage()
@@ -608,6 +627,33 @@ class TestFieldsFallback:
         assert rig.up("daily_activity") == 0
 
 
+class TestChunking:
+    def test_a_long_lookback_is_split_into_ranges(
+        self, tmp_path: Any, rsps: responses.RequestsMock
+    ) -> None:
+        sessions: list[requests.Session] = []
+        try:
+            rig = build_rig(tmp_path, rsps, sessions)
+            long = Exporter(
+                rig.exporter._fetcher._client,
+                rig.tokens,
+                load_definitions(),
+                RemoteWriter(sessions[-1], WRITE_URL),
+                300,
+                20,
+                monotonic=rig.mono,
+                wall=rig.wall,
+            )
+            long.poll()
+            assert len(rig.calls("heartrate")) == 3
+            assert len(rig.calls("daily_readiness")) == 1
+            starts = [call.request.params["start_datetime"] for call in rig.calls("heartrate")]
+            assert starts == sorted(starts)
+        finally:
+            for session in sessions:
+                session.close()
+
+
 class TestRunLoop:
     def test_polls_repeatedly_until_stopped(
         self, tmp_path: Any, rsps: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
@@ -616,11 +662,12 @@ class TestRunLoop:
         try:
             rig = build_rig(tmp_path, rsps, sessions)
             fast = Exporter(
-                rig.exporter._client,
+                rig.exporter._fetcher._client,
                 rig.tokens,
                 load_definitions(),
+                RemoteWriter(sessions[-1], WRITE_URL),
                 0.01,
-                today=lambda: TODAY,
+                3,
             )
             persist_calls: list[int] = []
             monkeypatch.setattr(rig.tokens, "retry_persist", lambda: persist_calls.append(1))
@@ -634,7 +681,12 @@ class TestRunLoop:
             thread.join(10)
             assert not thread.is_alive()
             assert len(persist_calls) >= 3
-            assert fast.registry.get_sample_value("oura_daily_activity_score") == 78
+            assert (
+                fast.registry.get_sample_value(
+                    "oura_exporter_category_up", {"category": "daily_activity"}
+                )
+                == 1
+            )
         finally:
             for session in sessions:
                 session.close()
