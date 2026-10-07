@@ -21,7 +21,7 @@ SKIPPED_FIELDS = {
     ("sleep", "period"): "internal period identifier, not a measurement",
 }
 SCOPES_NOT_IN_SPEC = {
-    "stress": "requested since 0.2.0, missing from the OpenAPI scope list",
+    "stress": "missing from the OpenAPI scope list",
     "ring_configuration": "ring battery answers 401 without it, not in the OpenAPI scope list",
 }
 type Leaf = tuple[tuple[str, ...], str, str]

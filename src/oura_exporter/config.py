@@ -245,12 +245,6 @@ class Settings:
         if time_zone is not None and (message := _time_zone_warning(time_zone)) is not None:
             warnings.append(message)
 
-        if _get(environ, "OURA_ACCESS_TOKEN") is not None:
-            warnings.append(
-                "OURA_ACCESS_TOKEN is set but Oura removed personal access tokens; "
-                "the variable is ignored, use OAuth (see README)"
-            )
-
         return cls(
             client_id=client_id,
             client_secret=secret,

@@ -251,14 +251,6 @@ def test_unreadable_auth_code_file_is_a_config_error(tmp_path: Path) -> None:
         settings.read_auth_code()
 
 
-def test_personal_access_token_is_ignored_with_a_warning() -> None:
-    settings = Settings.from_env(env(OURA_CLIENT_SECRET="s", OURA_ACCESS_TOKEN="PAT-VALUE-123"))
-    assert len(settings.warnings) == 1
-    assert "OURA_ACCESS_TOKEN" in settings.warnings[0]
-    assert "removed" in settings.warnings[0]
-    assert "PAT-VALUE-123" not in settings.warnings[0]
-
-
 def test_parse_port_and_listen_address_work_standalone() -> None:
     assert parse_port({}) == 8000
     assert parse_port({"PORT": " 9100 "}) == 9100
@@ -316,15 +308,12 @@ def test_https_api_base_url_does_not_warn(url: str) -> None:
 
 
 def test_warnings_accumulate_without_duplicates() -> None:
-    settings = Settings.from_env(
-        env(OURA_ACCESS_TOKEN="pat", TZ="Nowhere", OURA_API_BASE_URL="http://127.0.0.1:9")
-    )
-    assert len(settings.warnings) == 4
-    assert len(set(settings.warnings)) == 4
+    settings = Settings.from_env(env(TZ="Nowhere", OURA_API_BASE_URL="http://127.0.0.1:9"))
+    assert len(settings.warnings) == 3
+    assert len(set(settings.warnings)) == 3
     assert HTTP_WARNING in settings.warnings
     assert time_zone_warning("Nowhere") in settings.warnings
     assert any("OURA_CLIENT_SECRET" in warning for warning in settings.warnings)
-    assert any("OURA_ACCESS_TOKEN" in warning for warning in settings.warnings)
 
 
 def test_the_remote_write_password_can_come_from_a_file(tmp_path: Path) -> None:

@@ -5,9 +5,8 @@
 
 Every data point of the [Oura Ring](https://ouraring.com) API in Prometheus, at the time it was
 measured: each heart rate sample, the 5-minute sleep HRV, heart rate and sleep phases, MET per
-minute, battery samples, workouts, sessions, tags and the daily scores. Fork of
-[legnoh/oura-exporter](https://github.com/legnoh/oura-exporter), rewritten, with migration notes
-in [docs/details.md](./docs/details.md#migrating-from-020).
+minute, battery samples, workouts, sessions, tags and the daily scores. Based on
+[legnoh/oura-exporter](https://github.com/legnoh/oura-exporter).
 
 ## How it works
 

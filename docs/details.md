@@ -5,8 +5,7 @@ Everything the [README](../README.md) leaves out. All settings are documented in
 
 ## Authorization
 
-The exporter only supports OAuth. Oura removed personal access tokens, so `OURA_ACCESS_TOKEN` is
-ignored with a warning. Register the redirect URI (`http://localhost:8000/callback` by default)
+The exporter uses OAuth. Register the redirect URI (`http://localhost:8000/callback` by default)
 in your Oura application exactly as it is configured in `OURA_REDIRECT_URI`.
 
 **Interactive.** `docker compose run --rm -it oura-exporter` prints an authorization URL and asks
@@ -216,78 +215,6 @@ uv run --env-file .env oura-exporter
 `oura-exporter --version` prints the version and `oura-exporter --healthcheck` probes the local
 `/metrics` endpoint, which is what the image's `HEALTHCHECK` runs. Exit codes: 0 clean stop,
 1 authorization missing or the port could not be bound, 2 invalid configuration.
-
-## Migrating from 0.2.0
-
-0.3.0 changes how data reaches Prometheus.
-
-- **Data is pushed, not scraped.** Set `OURA_REMOTE_WRITE_URL` (required) and give the
-  receiver an out-of-order window of at least the lookback, see [Receiver](#receiver). The
-  data gauges are gone from `/metrics`, which now only has `oura_exporter_*`, `process_*` and
-  `python_info`. Remove the scrape job for the data or keep it for the health metrics.
-- **`*_timestamp_seconds` is gone** (including `oura_sleep_bedtime_start_timestamp_seconds` and
-  `oura_sleep_bedtime_end_timestamp_seconds`): every sample carries its own time now. Alerts on
-  data age use `absent_over_time` or the timestamp of the sample.
-- **Sleep** is no longer "the main sleep of the latest night". Every sleep period is exported
-  at its end with the label `sleep_type` (`long_sleep`, `late_nap`, ...), select
-  `sleep_type="long_sleep"` for the old view.
-- **Heart rate and ring battery** are every sample, not the most recent one.
-  `oura_heartrate_source` is a number (1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout),
-  not a state set.
-- **New scopes** `workout`, `session`, `tag`, `heart_health` and `ring_configuration` are requested, so the stored
-  token has to be authorized again (stop the service, `docker compose run --rm -it
-  oura-exporter`). Without them only the new categories report `forbidden`.
-- **New data:** sleep series and nested readiness, daily activity MET and class series, workouts,
-  sessions, bedtime guidance, VO2 max, cardiovascular age, tags, rest mode and the ring
-  configuration, see the [metric list](../README.md#metrics).
-- New settings: `OURA_REMOTE_WRITE_URL`, `OURA_REMOTE_WRITE_USERNAME`,
-  `OURA_REMOTE_WRITE_PASSWORD(_FILE)`, `OURA_LOOKBACK_DAYS`. `oura-exporter backfill` is new.
-- In custom `metrics.yml` files the kinds are now `daily`, `sample`, `event` and `single`
-  (`latest` became `sample`), `select`, `sort_by`, `enum` metrics and `transform` are gone,
-  see the packaged file.
-
-## Migrating from legnoh/oura-exporter
-
-- Personal access tokens are gone. `OURA_ACCESS_TOKEN` is ignored; use OAuth as above.
-- The `email` label is removed from every metric and `oura_personal_info_email_info` no longer
-  exists. The `email` scope is no longer requested.
-- The token must live in a directory, not a single mounted file. The image runs as UID 6872 and
-  uses `/data`. An existing token file is accepted: put it into the data directory as
-  `oauth_token.json` while the old container is stopped.
-- The default poll interval is 300 s instead of 60 s.
-- `uv run main.py` became `oura-exporter`, and `config/metrics.yml` is now packaged as
-  `src/oura_exporter/metrics.yml`.
-- Metrics are renamed to carry units, and `info` metrics became numbers or state sets:
-
-| Old | New |
-| --- | --- |
-| `oura_daily_activity_active_calories` | `oura_daily_activity_active_calories_kilocalories` |
-| `oura_daily_activity_equivalent_walking_distance` | `oura_daily_activity_equivalent_walking_distance_meters` |
-| `oura_daily_activity_high_activity_time` | `oura_daily_activity_high_activity_time_seconds` |
-| `oura_daily_activity_low_activity_time` | `oura_daily_activity_low_activity_time_seconds` |
-| `oura_daily_activity_medium_activity_time` | `oura_daily_activity_medium_activity_time_seconds` |
-| `oura_daily_activity_non_wear_time` | `oura_daily_activity_non_wear_time_seconds` |
-| `oura_daily_activity_resting_time` | `oura_daily_activity_resting_time_seconds` |
-| `oura_daily_activity_sedentary_time` | `oura_daily_activity_sedentary_time_seconds` |
-| `oura_daily_activity_target_calories` | `oura_daily_activity_target_calories_kilocalories` |
-| `oura_daily_activity_total_calories` | `oura_daily_activity_total_calories_kilocalories` |
-| `oura_daily_readiness_temperature_deviation` | `oura_daily_readiness_temperature_deviation_celsius` |
-| `oura_daily_readiness_temperature_trend_deviation` | `oura_daily_readiness_temperature_trend_deviation_celsius` |
-| `oura_daily_resilience_level_info{val}` | `oura_daily_resilience_level` (1-5) |
-| `oura_daily_spo2_spo2_percentage_average` | `oura_daily_spo2_average_percent` |
-| `oura_daily_stress_stress_high` | `oura_daily_stress_stress_high_seconds` |
-| `oura_daily_stress_recovery_high` | `oura_daily_stress_recovery_high_seconds` |
-| `oura_daily_stress_day_summary_info{val}` | `oura_daily_stress_day_summary` (1-3) |
-| `oura_heartrate_source_info{val}` | `oura_heartrate_source` (1-6) |
-| `oura_personal_info_age` | `oura_personal_info_age_years` |
-| `oura_personal_info_weight` | `oura_personal_info_weight_kilograms` |
-| `oura_personal_info_height` | `oura_personal_info_height_meters` |
-| `oura_personal_info_biological_sex_info{val}` | `oura_personal_info_biological_sex_info{biological_sex}` |
-| `oura_personal_info_email_info` | removed |
-
-All other names are unchanged. New in 0.2.0: `oura_sleep_*`, `oura_ring_battery_*`,
-`oura_daily_readiness_contributors_sleep_regularity`,
-`oura_daily_spo2_breathing_disturbance_index` and the `oura_exporter_*` self-metrics.
 
 ## Disclaimer
 

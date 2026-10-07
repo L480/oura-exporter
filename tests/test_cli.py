@@ -341,12 +341,10 @@ class TestExitCodes:
     def test_startup_warnings_are_logged(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        env = base_env(tmp_path, OURA_ACCESS_TOKEN="legacy-pat")
+        env = base_env(tmp_path)
         del env["OURA_CLIENT_SECRET"]
         with caplog.at_level(logging.WARNING):
             cli.main([], env)
-        assert "OURA_ACCESS_TOKEN" in caplog.text
-        assert "legacy-pat" not in caplog.text
         assert "OURA_CLIENT_SECRET" in caplog.text
 
     def test_time_zone_and_http_warnings_are_logged_at_startup(
