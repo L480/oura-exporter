@@ -170,18 +170,15 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - id: tag_message
-        name: Read annotated tag message
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          delim="EOF_$(openssl rand -hex 16)"
+          notes="$(mktemp)"
           {
-            echo "body<<${delim}"
-            git tag -l --format='%(contents)' "${GITHUB_REF_NAME}"
-            echo "${delim}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          body: ${{ steps.tag_message.outputs.body }}
-          append_body: true
-          generate_release_notes: true
+            git tag -l --format='%(contents)' "${TAG}"
+            echo
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${TAG}" --jq .body
+          } > "${notes}"
+          gh release create "${TAG}" --verify-tag --title "${TAG}" --notes-file "${notes}"
