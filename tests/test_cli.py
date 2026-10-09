@@ -457,10 +457,12 @@ class TestRun:
         caplog: pytest.LogCaptureFixture,
         signal_number: int,
     ) -> None:
+        monkeypatch.setattr(prometheus_client.metrics, "_use_created", True)
         with caplog.at_level(logging.INFO):
             code, body, port = self.run_service(tmp_path, rsps, monkeypatch, signal_number)
         assert code == 0
         assert "oura_exporter_build_info" in body
+        assert "_created" not in body
         assert "oura_daily_activity_score" not in body
         assert 'oura_exporter_category_up{category="daily_activity"} 1.0' in body
         pushed = [

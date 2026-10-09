@@ -91,13 +91,14 @@ def _authorized(settings: Settings) -> Iterator[tuple[OuraClient, TokenManager]]
 
 
 def _serve(settings: Settings) -> int:
-    from prometheus_client import start_http_server
+    from prometheus_client import disable_created_metrics, start_http_server
 
     from oura_exporter.api import build_session
     from oura_exporter.definitions import load_definitions
     from oura_exporter.exporter import Exporter
     from oura_exporter.remote_write import RemoteWriter
 
+    disable_created_metrics()  # type: ignore[no-untyped-call]
     definitions = load_definitions(settings.metrics_config)
     if settings.remote_write_url is None:
         raise ConfigError("OURA_REMOTE_WRITE_URL is required")
