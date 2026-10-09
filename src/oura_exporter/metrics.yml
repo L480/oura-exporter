@@ -286,6 +286,7 @@ categories:
         type: string
         interval: 300
         start: timestamp
+        sync_horizon: true
         help: "Activity class per 5 minutes: 0 non wear, 1 rest, 2 inactive, 3 low, 4 medium, 5 high."
 
   - name: heartrate

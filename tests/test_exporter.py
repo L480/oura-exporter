@@ -245,7 +245,8 @@ class TestRestartAfterRevision:
             rig.exporter.poll()
             activity = load_fixture("daily_activity")
             for document in activity["data"]:
-                document["class_5_min"] = document["class_5_min"][:-1] + "4"
+                text = document["class_5_min"]
+                document["class_5_min"] = text[:17] + "4" + text[18:]
             rsps.replace(responses.GET, api_url("daily_activity"), json=activity)
             heart = load_fixture("heartrate")
             heart["data"].append(
@@ -273,7 +274,7 @@ class TestRestartAfterRevision:
                 70.0,
             )
             slots = rig.stored("oura_daily_activity_class_5_min")
-            assert len(slots) == 3 * 19
+            assert len(slots) == 3 * 19 - 1
             assert slots[-1][1] == 5.0
         finally:
             for session in sessions:

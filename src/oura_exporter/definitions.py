@@ -59,7 +59,7 @@ DEFAULT_SUMMARIES = {
 CONTRIBUTOR_PREFIX = "contributors_"
 METRIC_KEYS = frozenset({"name", "help", "path", "type", "mapping"})
 LABEL_KEYS = frozenset({"name", "path"})
-SERIES_KEYS = frozenset({"name", "help", "path", "type", "interval", "start"})
+SERIES_KEYS = frozenset({"name", "help", "path", "type", "interval", "start", "sync_horizon"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +91,7 @@ class Series:
     type: SeriesType
     interval: float | None = None
     start: tuple[str, ...] | None = None
+    sync_horizon: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +109,10 @@ class Category:
     no_end: NoEnd = "skip"
     title: str = ""
     summary: str = ""
+
+    @property
+    def horizon_series(self) -> Series | None:
+        return next((series for series in self.series if series.sync_horizon), None)
 
     @property
     def duration_name(self) -> str | None:
@@ -289,7 +294,7 @@ def _parse_label(raw: object, where: str) -> Label:
     return Label(name=name, path=_path(data, "path", where, default=name))
 
 
-def _parse_series(raw: object, prefix: str, where: str) -> Series:
+def _parse_series(raw: object, prefix: str, kind: Kind, where: str) -> Series:
     data = _mapping(raw, where)
     _check_keys(data, SERIES_KEYS, where)
     name = _identifier(data, "name", where)
@@ -308,6 +313,13 @@ def _parse_series(raw: object, prefix: str, where: str) -> Series:
         start = _path(data, "start", where)
     elif "interval" in data or "start" in data:
         raise ConfigError(f"{where}: 'interval' and 'start' are only valid for type 'string'")
+    sync_horizon = data.get("sync_horizon", False)
+    if not isinstance(sync_horizon, bool):
+        raise ConfigError(f"{where}: 'sync_horizon' must be true or false")
+    if sync_horizon and (series_type != "string" or kind != "daily"):
+        raise ConfigError(
+            f"{where}: 'sync_horizon' is only valid for type 'string' in kind 'daily'"
+        )
     return Series(
         name=name,
         full_name=f"{prefix}{name}",
@@ -316,6 +328,7 @@ def _parse_series(raw: object, prefix: str, where: str) -> Series:
         type=series_type,
         interval=interval,
         start=start,
+        sync_horizon=sync_horizon,
     )
 
 
@@ -369,9 +382,11 @@ def _parse_category(raw: object, where: str) -> Category:
         for index, item in enumerate(_parse_list(data, "labels", where))
     )
     series = tuple(
-        _parse_series(item, prefix, f"{where}: series[{index}]")
+        _parse_series(item, prefix, kind, f"{where}: series[{index}]")
         for index, item in enumerate(_parse_list(data, "series", where))
     )
+    if sum(item.sync_horizon for item in series) > 1:
+        raise ConfigError(f"{where}: only one series may set 'sync_horizon'")
     metrics = tuple(
         _parse_metric(item, prefix, f"{where}: metrics[{index}]")
         for index, item in enumerate(_parse_list(data, "metrics", where))

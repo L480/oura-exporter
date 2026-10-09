@@ -315,7 +315,58 @@ class TestDaily:
         assert (start + 60, 1.0) in met
         classes = series(found, "oura_daily_activity_class_5_min")
         assert (start, 1.0) in classes
-        assert (start + 300 * 18, 5.0) in classes
+        assert (start + 300 * 17, 5.0) in classes
+        assert (start + 300 * 18, 5.0) not in classes
+
+    def synced_day(self, sync_minute: int = 620) -> dict[str, Any]:
+        document = dict(documents("daily_activity")[1])
+        document["met"] = {
+            "timestamp": "2026-10-06T04:00:00+00:00",
+            "interval": 60,
+            "items": [1.5 if i <= sync_minute else 0.9 for i in range(1440)],
+        }
+        document["class_5_min"] = "3" * -(-sync_minute // 5)
+        return document
+
+    def test_provisional_activity_is_held_back_until_the_day_settles(self) -> None:
+        category_ = category("daily_activity")
+        document = self.synced_day()
+        found = build_points(category_, [document], NOW, live=True)
+        last_slot = epoch("2026-10-06T04:00:00+00:00") + 300 * 123
+        met = series(found, "oura_daily_activity_met")
+        classes = series(found, "oura_daily_activity_class_5_min")
+        assert len(classes) == 123
+        assert max(ts for ts, _ in classes) == last_slot - 300
+        assert len(met) == 615
+        assert all(ts < last_slot for ts, _ in met + classes)
+        assert series(found, "oura_daily_activity_score")
+        settled = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+        found = build_points(category_, [document], settled, live=False)
+        assert len(series(found, "oura_daily_activity_met")) == 1440
+        assert len(series(found, "oura_daily_activity_class_5_min")) == 124
+
+    def test_activity_without_the_horizon_string_pushes_no_series_until_settled(self) -> None:
+        document = self.synced_day()
+        del document["class_5_min"]
+        found = build_points(category("daily_activity"), [document], NOW, live=True)
+        assert series(found, "oura_daily_activity_met") == []
+        assert series(found, "oura_daily_activity_score")
+        settled = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+        found = build_points(category("daily_activity"), [document], settled, live=False)
+        assert len(series(found, "oura_daily_activity_met")) == 1440
+
+    @pytest.mark.parametrize("raw", ["", None, 5])
+    def test_an_unusable_horizon_string_holds_back_all_series(self, raw: Any) -> None:
+        document = self.synced_day()
+        document["class_5_min"] = raw
+        found = build_points(category("daily_activity"), [document], NOW, live=True)
+        assert series(found, "oura_daily_activity_met") == []
+
+    def test_an_unparseable_horizon_start_holds_back_all_series(self) -> None:
+        document = self.synced_day()
+        document["timestamp"] = "garbage"
+        found = build_points(category("daily_activity"), [document], NOW, live=True)
+        assert series(found, "oura_daily_activity_met") == []
 
     def test_nested_values_and_mappings(self) -> None:
         found = points("daily_resilience")

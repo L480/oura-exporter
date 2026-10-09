@@ -38,6 +38,16 @@ CATEGORY_KINDS = {
 }
 
 
+HORIZON_SERIES = {
+    "name": "s",
+    "help": "S.",
+    "type": "string",
+    "interval": 300,
+    "start": "timestamp",
+    "sync_horizon": True,
+}
+
+
 def valid() -> dict[str, Any]:
     return {
         "categories": [
@@ -450,6 +460,28 @@ class TestValidation:
                 ),
                 "duplicate metric name",
             ),
+            (
+                lambda d: d["categories"][0].update(
+                    series=[{**HORIZON_SERIES, "sync_horizon": "yes"}]
+                ),
+                "'sync_horizon' must be true or false",
+            ),
+            (
+                lambda d: d["categories"][0].update(
+                    series=[{"name": "s", "help": "S.", "type": "samples", "sync_horizon": True}]
+                ),
+                "'sync_horizon' is only valid for type 'string' in kind 'daily'",
+            ),
+            (
+                lambda d: d["categories"][0].update(kind="sample", series=[HORIZON_SERIES]),
+                "'sync_horizon' is only valid for type 'string' in kind 'daily'",
+            ),
+            (
+                lambda d: d["categories"][0].update(
+                    series=[HORIZON_SERIES, {**HORIZON_SERIES, "name": "t"}]
+                ),
+                "only one series may set 'sync_horizon'",
+            ),
         ],
     )
     def test_invalid_definitions(
@@ -531,3 +563,13 @@ class TestLoading:
         path.write_text("categories: !!python/object/apply:os.getcwd []\n", encoding="utf-8")
         with pytest.raises(ConfigError, match="invalid YAML"):
             load_definitions(path)
+
+
+def test_the_horizon_series_is_exposed_on_the_category() -> None:
+    raw = valid()
+    raw["categories"][0]["series"] = [HORIZON_SERIES]
+    horizon = parse_definitions(raw, "test")[0].horizon_series
+    assert horizon is not None
+    assert horizon.name == "s"
+    assert by_name("daily_activity").horizon_series is not None
+    assert by_name("heartrate").horizon_series is None

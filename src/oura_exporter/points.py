@@ -161,6 +161,14 @@ def _sample_points(
     return points
 
 
+def _horizon_ms(series: Series, document: Document) -> int | None:
+    raw = walk(document, series.path)
+    start = parse_datetime(walk(document, series.start or ()))
+    if not isinstance(raw, str) or not raw or start is None or series.interval is None:
+        return None
+    return to_ms(start) + round((len(raw) - 1) * series.interval * 1000)
+
+
 def _document_points(
     category: Category,
     document: Document,
@@ -169,10 +177,14 @@ def _document_points(
     warned: Warned,
     *,
     span_start: datetime | None = None,
+    held_back: bool = False,
 ) -> list[Point]:
     points: list[Point] = []
     for series in category.series:
         points += _sample_points(series, document, labels, warned)
+    if held_back and category.horizon_series is not None:
+        limit = _horizon_ms(category.horizon_series, document)
+        points = [point for point in points if limit is not None and point.timestamp_ms < limit]
     if span_start is not None:
         points += _duration_points(category, document, labels, span_start, warned)
     if timestamp_ms is not None:
@@ -263,12 +275,14 @@ def _daily_points(
     points: list[Point] = []
     for day, document in sorted(by_day.items()):
         labels = _labels(category, document)
+        settled = settled_at(day, now)
         if live and day == newest:
             timestamp_ms: int | None = to_ms(now)
         else:
-            settled = settled_at(day, now)
             timestamp_ms = None if settled is None else to_ms(settled)
-        points += _document_points(category, document, labels, timestamp_ms, warned)
+        points += _document_points(
+            category, document, labels, timestamp_ms, warned, held_back=settled is None
+        )
     return points
 
 
