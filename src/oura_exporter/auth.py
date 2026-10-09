@@ -395,11 +395,12 @@ def _prompt_for_code(
 
 def _warn_missing_scopes(requested: Sequence[str], granted: object) -> None:
     if isinstance(granted, str):
-        granted_scopes = {scope for scope in re.split(r"[\s,]+", granted) if scope}
+        names = [scope for scope in re.split(r"[\s,]+", granted) if scope]
     elif isinstance(granted, list):
-        granted_scopes = {scope for scope in granted if isinstance(scope, str)}
+        names = [scope for scope in granted if isinstance(scope, str)]
     else:
         return
+    granted_scopes = {name.rpartition(":")[2] for name in names}
     missing = [scope for scope in requested if scope not in granted_scopes]
     if missing:
         logger.warning(

@@ -33,6 +33,10 @@ CLIENT_ID = "client-id"
 SECRET = "client-secret"
 REDIRECT = "http://localhost:8000/callback"
 SCOPES = ("personal", "daily", "heartrate", "spo2", "stress")
+PRODUCTION_SCOPES = (
+    "extapi:personal extapi:daily extapi:heartrate extapi:spo2 extapi:stress extapi:workout "
+    "extapi:session extapi:tag extapi:heart_health extapi:ring_configuration"
+)
 NOW = 1_800_000_000.0
 
 
@@ -968,6 +972,9 @@ class TestAuthenticateConsent:
             ("personal daily heartrate spo2 stress", False),
             ("personal,daily,heartrate,spo2,stress", False),
             (["personal", "daily", "heartrate", "spo2"], True),
+            ("extapi:personal extapi:daily extapi:heartrate extapi:spo2 extapi:stress", False),
+            (PRODUCTION_SCOPES, False),
+            ("extapi:personal extapi:daily", True),
             (None, False),
             (42, False),
         ],
@@ -992,7 +999,7 @@ class TestAuthenticateConsent:
             )
         warned = "did not grant the scopes" in caplog.text
         assert warned is expect_warning
-        if granted == "personal daily":
+        if granted in ("personal daily", "extapi:personal extapi:daily"):
             assert "heartrate, spo2, stress" in caplog.text
 
     def test_failure_to_save_the_token_is_a_config_error(
