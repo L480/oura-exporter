@@ -235,6 +235,26 @@ class TestRemoteWriteResults:
         assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
 
 
+class TestSleepSettling:
+    def test_an_extended_sleep_period_only_reaches_the_receiver_once_settled(
+        self, rig: Rig
+    ) -> None:
+        name = "oura_sleep_total_sleep_duration_seconds"
+        rig.exporter.poll()
+        assert rig.stored(name, sleep_type="late_nap") == []
+        payload = load_fixture("sleep")
+        nap = payload["data"][2]
+        nap["bedtime_end"] = "2026-10-06T15:10:00+00:00"
+        nap["total_sleep_duration"] = 3000
+        rig.rsps.replace(responses.GET, api_url("sleep"), json=payload)
+        rig.advance(3 * 3600 + 301)
+        rig.exporter.poll()
+        assert rig.stored(name, sleep_type="late_nap") == [
+            (int(epoch("2026-10-06T15:10:00+00:00") * 1000), 3000.0)
+        ]
+        assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
+
+
 class TestRestartAfterRevision:
     def test_a_conflicting_slot_does_not_cost_the_rest_of_the_window(
         self, tmp_path: Any, rsps: responses.RequestsMock

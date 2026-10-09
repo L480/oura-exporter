@@ -45,6 +45,7 @@ CATEGORY_KEYS = frozenset(
         "time_path",
         "end_path",
         "no_end",
+        "settle_delay",
         "labels",
         "series",
         "metrics",
@@ -107,6 +108,7 @@ class Category:
     time_path: tuple[str, ...] | None = None
     end_path: tuple[str, ...] | None = None
     no_end: NoEnd = "skip"
+    settle_delay: int = 0
     title: str = ""
     summary: str = ""
 
@@ -377,6 +379,12 @@ def _parse_category(raw: object, where: str) -> Category:
     if "no_end" in data and end_path is None:
         raise ConfigError(f"{where}: 'no_end' needs 'end_path'")
 
+    settle_delay = data.get("settle_delay", 0)
+    if not isinstance(settle_delay, int) or isinstance(settle_delay, bool) or settle_delay < 0:
+        raise ConfigError(f"{where}: 'settle_delay' must be a non-negative integer (seconds)")
+    if "settle_delay" in data and kind != "event":
+        raise ConfigError(f"{where}: 'settle_delay' is only valid for kind 'event'")
+
     labels = tuple(
         _parse_label(item, f"{where}: labels[{index}]")
         for index, item in enumerate(_parse_list(data, "labels", where))
@@ -405,6 +413,7 @@ def _parse_category(raw: object, where: str) -> Category:
         time_path=time_path,
         end_path=end_path,
         no_end=no_end,
+        settle_delay=settle_delay,
         title=title,
         summary=summary,
     )

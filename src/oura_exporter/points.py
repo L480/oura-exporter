@@ -223,6 +223,8 @@ def build_points(
             if moment is None:
                 _warn(seen, f"{category.prefix}timestamp", raw, "ignoring unparseable time")
                 continue
+            if not _settled_event(category, document, moment, now):
+                continue
             span = moment if category.kind == "event" else None
             points += _document_points(
                 category,
@@ -236,6 +238,18 @@ def build_points(
         cutoff_ms = to_ms(cutoff)
         points = [point for point in points if point.timestamp_ms >= cutoff_ms]
     return _drop_future(category, points, now, seen)
+
+
+def _settled_event(category: Category, document: Document, moment: datetime, now: datetime) -> bool:
+    if category.settle_delay <= 0:
+        return True
+    reference = moment
+    if category.end_path is not None:
+        end = parse_datetime(walk(document, category.end_path))
+        if end is None:
+            return False
+        reference = end
+    return reference + timedelta(seconds=category.settle_delay) <= now
 
 
 def _drop_future(

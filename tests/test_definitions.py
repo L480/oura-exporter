@@ -461,6 +461,19 @@ class TestValidation:
                 "duplicate metric name",
             ),
             (
+                lambda d: d["categories"][0].update(settle_delay=-1),
+                "'settle_delay' must be a non-neg",
+            ),
+            (
+                lambda d: d["categories"][0].update(settle_delay=True),
+                "'settle_delay' must be a non-neg",
+            ),
+            (
+                lambda d: d["categories"][0].update(settle_delay=1.5),
+                "'settle_delay' must be a non-neg",
+            ),
+            (lambda d: d["categories"][0].update(settle_delay=60), "only valid for kind 'event'"),
+            (
                 lambda d: d["categories"][0].update(
                     series=[{**HORIZON_SERIES, "sync_horizon": "yes"}]
                 ),
@@ -573,3 +586,11 @@ def test_the_horizon_series_is_exposed_on_the_category() -> None:
     assert horizon.name == "s"
     assert by_name("daily_activity").horizon_series is not None
     assert by_name("heartrate").horizon_series is None
+
+
+def test_settle_delay_is_accepted_for_events() -> None:
+    raw = event()
+    raw["categories"][0]["settle_delay"] = 60
+    assert parse_definitions(raw, "test")[0].settle_delay == 60
+    assert by_name("sleep").settle_delay == 10800
+    assert by_name("workout").settle_delay == 0

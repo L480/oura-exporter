@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -107,7 +108,7 @@ class TestSamples:
 
 class TestEvents:
     def test_sleep_scalars_sit_at_the_end_with_the_type_label(self) -> None:
-        found = points("sleep")
+        found = points("sleep", now=NOW + timedelta(hours=3))
         long_sleep = series(
             found, "oura_sleep_total_sleep_duration_seconds", sleep_type="long_sleep"
         )
@@ -115,6 +116,27 @@ class TestEvents:
         nap = series(found, "oura_sleep_total_sleep_duration_seconds", sleep_type="late_nap")
         assert [timestamp for timestamp, _ in nap] == [epoch("2026-10-06T14:35:00+00:00")]
         assert len(series(found, "oura_sleep_total_sleep_duration_seconds")) == 4
+
+    def test_a_sleep_period_is_held_back_until_three_hours_after_it_ended(self) -> None:
+        nap = [documents("sleep")[2]]
+        end = datetime(2026, 10, 6, 14, 35, tzinfo=UTC)
+        assert category("sleep").settle_delay == 10800
+        before = build_points(
+            category("sleep"), nap, end + timedelta(hours=2, minutes=59), live=True
+        )
+        assert before == []
+        after = build_points(category("sleep"), nap, end + timedelta(hours=3), live=True)
+        assert len(series(after, "oura_sleep_total_sleep_duration_seconds")) == 1
+        assert series(after, "oura_sleep_phase_5_min")
+
+    def test_settling_an_event_with_an_end_waits_for_the_end(self) -> None:
+        workout = dataclasses.replace(category("workout"), settle_delay=3600)
+        done = documents("workout")[0]
+        running = {k: v for k, v in done.items() if k != "end_datetime"}
+        end = datetime(2026, 10, 5, 17, 45, tzinfo=UTC)
+        assert build_points(workout, [done], end + timedelta(minutes=59), live=True) == []
+        assert build_points(workout, [done], end + timedelta(hours=1), live=True)
+        assert build_points(workout, [running], end + timedelta(days=1), live=True) == []
 
     def test_embedded_series_start_at_their_own_timestamp(self) -> None:
         found = points("sleep")
