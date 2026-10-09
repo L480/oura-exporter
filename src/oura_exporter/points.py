@@ -279,32 +279,35 @@ class DeliveryLog:
     def __len__(self) -> int:
         return len(self._values)
 
-    def fresh(self, points: Iterable[Point]) -> list[Point]:
+    def split(self, points: Iterable[Point]) -> tuple[list[Point], list[Point]]:
         unique: dict[tuple[Key, int], Point] = {}
         for point in points:
             unique[(point.key, point.timestamp_ms)] = point
-        return [
-            point
-            for slot, point in unique.items()
-            if slot not in self._values or self._values[slot] != point.value
-        ]
-
-    def record(self, points: Iterable[Point]) -> int:
-        revisions = 0
-        for point in points:
-            slot = (point.key, point.timestamp_ms)
+        new: list[Point] = []
+        revised: list[Point] = []
+        for slot, point in unique.items():
             known = self._values.get(slot)
-            if known is not None and known != point.value:
-                revisions += 1
-                logger.debug(
-                    "%s: value revised at %d (%s -> %s)",
-                    point.name,
-                    point.timestamp_ms,
-                    known,
-                    point.value,
-                )
+            if known is None:
+                new.append(point)
+            elif known != point.value:
+                revised.append(point)
+        return new, revised
+
+    def record(self, points: Iterable[Point]) -> None:
+        for point in points:
+            self._values[(point.key, point.timestamp_ms)] = point.value
+
+    def note(self, revised: Iterable[Point]) -> None:
+        for point in revised:
+            slot = (point.key, point.timestamp_ms)
+            logger.debug(
+                "%s: value revised at %d (%s -> %s), not sent",
+                point.name,
+                point.timestamp_ms,
+                self._values[slot],
+                point.value,
+            )
             self._values[slot] = point.value
-        return revisions
 
     def prune(self, cutoff: datetime) -> None:
         cutoff_ms = to_ms(cutoff)

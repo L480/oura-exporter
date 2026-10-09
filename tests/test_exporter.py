@@ -114,7 +114,8 @@ class TestFullPoll:
         assert rig.value("oura_exporter_build_info", version=__version__) == 1
         assert rig.value("oura_exporter_token_persisted") == 1
         assert rig.value("oura_exporter_remote_write_last_success_timestamp_seconds") == WALL
-        assert rig.value("oura_exporter_sample_revisions_total") == 0
+        for category in CATEGORIES:
+            assert rig.value("oura_exporter_sample_revisions_total", category=category) == 0
         for category in CATEGORIES:
             assert (
                 rig.value(
@@ -170,20 +171,22 @@ class TestDeduplication:
         assert heart[-1] == (int(epoch("2026-10-06T07:30:00+00:00") * 1000), 70.0)
         assert len(heart) == 5
 
-    def test_revisions_are_sent_and_counted(self, rig: Rig) -> None:
+    def test_revisions_are_counted_not_sent(self, rig: Rig) -> None:
         rig.exporter.poll()
         payload = load_fixture("sleep")
         payload["data"][1]["total_sleep_duration"] = 26100
         rig.rsps.replace(responses.GET, api_url("sleep"), json=payload)
         rig.mono.advance(300)
         rig.exporter.poll()
-        assert rig.value("oura_exporter_sample_revisions_total") == 1
+        assert rig.value("oura_exporter_sample_revisions_total", category="sleep") == 1
         end = int(epoch("2026-10-06T06:58:41+00:00") * 1000)
-        revised = rig.pushed("oura_sleep_total_sleep_duration_seconds", sleep_type="long_sleep")
-        assert (end, 26100.0) in revised
+        name = "oura_sleep_total_sleep_duration_seconds"
+        assert (end, 26100.0) not in rig.pushed(name, sleep_type="long_sleep")
+        assert (end, 26100.0) not in rig.stored(name, sleep_type="long_sleep")
+        assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
         rig.mono.advance(300)
         rig.exporter.poll()
-        assert rig.value("oura_exporter_sample_revisions_total") == 1
+        assert rig.value("oura_exporter_sample_revisions_total", category="sleep") == 1
 
 
 class TestRemoteWriteResults:

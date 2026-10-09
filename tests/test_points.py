@@ -428,38 +428,39 @@ class TestDeliveryLog:
     def point(self, value: float, timestamp: int = 1000, name: str = "m") -> Point:
         return Point(name, (("job", JOB),), timestamp, value)
 
-    def test_only_new_or_changed_samples_are_fresh(self) -> None:
+    def test_split_separates_new_from_revised(self) -> None:
         log = DeliveryLog()
         first = [self.point(1.0), self.point(2.0, 2000)]
-        assert log.fresh(first) == first
-        assert log.record(first) == 0
+        assert log.split(first) == (first, [])
+        log.record(first)
         assert len(log) == 2
-        assert log.fresh(first) == []
-        assert log.fresh([self.point(5.0)]) == [self.point(5.0)]
-        assert log.fresh([self.point(1.0, 3000)]) == [self.point(1.0, 3000)]
+        assert log.split(first) == ([], [])
+        assert log.split([self.point(5.0)]) == ([], [self.point(5.0)])
+        assert log.split([self.point(1.0, 3000)]) == ([self.point(1.0, 3000)], [])
 
     def test_nothing_is_remembered_until_recorded(self) -> None:
         log = DeliveryLog()
-        assert log.fresh([self.point(1.0)]) == [self.point(1.0)]
-        assert log.fresh([self.point(1.0)]) == [self.point(1.0)]
+        assert log.split([self.point(1.0)]) == ([self.point(1.0)], [])
+        assert log.split([self.point(1.0)]) == ([self.point(1.0)], [])
 
     def test_duplicates_in_one_batch_collapse_to_the_last(self) -> None:
         log = DeliveryLog()
-        assert log.fresh([self.point(1.0), self.point(2.0)]) == [self.point(2.0)]
+        assert log.split([self.point(1.0), self.point(2.0)]) == ([self.point(2.0)], [])
 
-    def test_revisions_are_counted_and_logged_at_debug(
+    def test_revisions_are_logged_at_debug_and_counted_once(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         log = DeliveryLog()
         log.record([self.point(1.0)])
+        revised = log.split([self.point(2.0)])[1]
         with caplog.at_level(logging.DEBUG):
-            assert log.record([self.point(2.0)]) == 1
-        assert "revised" in caplog.text
-        assert log.fresh([self.point(2.0)]) == []
+            log.note(revised)
+        assert "revised at 1000 (1.0 -> 2.0), not sent" in caplog.text
+        assert log.split([self.point(2.0)]) == ([], [])
 
     def test_prune_keeps_the_window(self) -> None:
         log = DeliveryLog()
         log.record([self.point(1.0, 1000), self.point(2.0, 5000)])
         log.prune(datetime.fromtimestamp(3.0, tz=UTC))
         assert len(log) == 1
-        assert log.fresh([self.point(1.0, 1000)]) == [self.point(1.0, 1000)]
+        assert log.split([self.point(1.0, 1000)]) == ([self.point(1.0, 1000)], [])

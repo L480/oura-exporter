@@ -115,10 +115,13 @@ class Exporter:
         )
         self._revisions = Counter(
             "oura_exporter_sample_revisions",
-            "Samples whose value changed after they were delivered and were sent again; the "
-            "receiver decides which value it keeps.",
+            "Samples Oura changed after they were delivered; not sent again because a "
+            "receiver cannot overwrite a sample.",
+            ["category"],
             registry=self.registry,
         )
+        for category in self._categories:
+            self._revisions.labels(category.name)
         self._write_success = Gauge(
             "oura_exporter_remote_write_last_success_timestamp_seconds",
             "Unix time of the last successful remote write request.",
@@ -201,10 +204,13 @@ class Exporter:
         cutoff: datetime,
         now: float,
     ) -> None:
-        fresh = self._log.fresh(points)
+        fresh, revised = self._log.split(points)
+        if revised:
+            self._log.note(revised)
+            self._revisions.labels(category.name).inc(len(revised))
         if fresh:
             delivery = self._writer.send(fresh)
-            self._revisions.inc(self._log.record(delivery.delivered))
+            self._log.record(delivery.delivered)
             self._samples.labels("sent").inc(delivery.sent)
             self._samples.labels("rejected").inc(delivery.rejected)
             if delivery.delivered and self._writer.last_success is not None:
