@@ -235,6 +235,51 @@ class TestRemoteWriteResults:
         assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
 
 
+class TestRestartAfterRevision:
+    def test_a_conflicting_slot_does_not_cost_the_rest_of_the_window(
+        self, tmp_path: Any, rsps: responses.RequestsMock
+    ) -> None:
+        sessions: list[requests.Session] = []
+        try:
+            rig = build_rig(tmp_path, rsps, sessions)
+            rig.exporter.poll()
+            activity = load_fixture("daily_activity")
+            for document in activity["data"]:
+                document["class_5_min"] = document["class_5_min"][:-1] + "4"
+            rsps.replace(responses.GET, api_url("daily_activity"), json=activity)
+            heart = load_fixture("heartrate")
+            heart["data"].append(
+                {"bpm": 70, "source": "live", "timestamp": "2026-10-06T07:30:00+00:00"}
+            )
+            rsps.replace(responses.GET, api_url("heartrate"), json=heart)
+            restarted = Exporter(
+                rig.exporter._fetcher._client,
+                rig.tokens,
+                load_definitions(),
+                RemoteWriter(sessions[-1], WRITE_URL, wall=rig.wall),
+                300,
+                3,
+                monotonic=rig.mono,
+                wall=rig.wall,
+            )
+            restarted.poll()
+            registry = restarted.registry
+            rejected = registry.get_sample_value(
+                "oura_exporter_remote_write_samples_total", {"result": "rejected"}
+            )
+            assert rejected == 1
+            assert rig.stored("oura_heartrate_bpm")[-1] == (
+                int(epoch("2026-10-06T07:30:00+00:00") * 1000),
+                70.0,
+            )
+            slots = rig.stored("oura_daily_activity_class_5_min")
+            assert len(slots) == 3 * 19
+            assert slots[-1][1] == 5.0
+        finally:
+            for session in sessions:
+                session.close()
+
+
 class TestScheduling:
     def test_refresh_interval_is_honoured(self, rig: Rig) -> None:
         rig.exporter.poll()

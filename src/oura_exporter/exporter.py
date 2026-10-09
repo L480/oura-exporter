@@ -100,8 +100,8 @@ class Exporter:
         )
         self._samples = Counter(
             "oura_exporter_remote_write_samples",
-            "Samples pushed by result: sent, or rejected by the receiver (a batch answered "
-            "with HTTP 400 counts as rejected).",
+            "Samples pushed by result: sent, or rejected by the receiver (HTTP 400, narrowed "
+            "down to the individual samples).",
             ["result"],
             registry=self.registry,
         )

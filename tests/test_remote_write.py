@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 
 import cramjam
@@ -10,12 +11,13 @@ from oura_exporter.api import build_session
 from oura_exporter.points import JOB, Point
 from oura_exporter.remote_write import (
     BATCH_SIZE,
+    MAX_REQUESTS_PER_SEND,
     RemoteWriter,
     encode_write_request,
     snappy_literal,
 )
 
-from .helpers import decode_write_request
+from .helpers import WALL, FakeClock, FakeTsdb, decode_write_request
 
 URL = "http://prometheus.test/api/v1/write"
 
@@ -235,3 +237,88 @@ class TestSending:
         assert any(
             "recovered after rate_limited" in m for level, m in levels if level == logging.INFO
         )
+
+
+class TestIsolation:
+    def series(self, index: int, start: int, count: int, value: float = 1.0) -> list[Point]:
+        return [
+            Point(f"oura_s{index}", (("job", JOB),), 1000 + i, value)
+            for i in range(start, start + count)
+        ]
+
+    def tsdb(self, rsps: responses.RequestsMock) -> FakeTsdb:
+        tsdb = FakeTsdb(FakeClock(WALL))
+        rsps.add_callback(responses.POST, URL, callback=tsdb.handle)
+        return tsdb
+
+    def seeded(self, writer: RemoteWriter, rsps: responses.RequestsMock) -> FakeTsdb:
+        tsdb = self.tsdb(rsps)
+        writer.send([p for index in range(3) for p in self.series(index, 0, 100)])
+        tsdb.requests = 0
+        return tsdb
+
+    def new_points(self, conflicts: list[int]) -> list[Point]:
+        points = [p for index in range(3) for p in self.series(index, 100, 100)]
+        points += [p for index in conflicts for p in self.series(index, 99, 1, 2.0)]
+        return points
+
+    def test_one_conflict_loses_only_that_sample(
+        self, writer: RemoteWriter, rsps: responses.RequestsMock
+    ) -> None:
+        tsdb = self.seeded(writer, rsps)
+        points = self.new_points([1])
+        delivery = writer.send(points)
+        assert (delivery.sent, delivery.rejected, delivery.failure) == (len(points) - 1, 1, None)
+        assert len(delivery.delivered) == len(points)
+        for index in range(3):
+            values = tsdb.samples[(f"oura_s{index}", (("job", JOB),))]
+            assert sorted(values) == list(range(1000, 1200))
+        assert tsdb.samples[("oura_s1", (("job", JOB),))][1099] == 1.0
+        assert tsdb.requests <= 1 + 2 * math.ceil(math.log2(len(points)))
+
+    def test_several_conflicts_are_all_isolated(
+        self, writer: RemoteWriter, rsps: responses.RequestsMock
+    ) -> None:
+        tsdb = self.seeded(writer, rsps)
+        points = self.new_points([0, 2])
+        delivery = writer.send(points)
+        assert (delivery.sent, delivery.rejected) == (len(points) - 2, 2)
+        for index in range(3):
+            assert len(tsdb.samples[(f"oura_s{index}", (("job", JOB),))]) == 200
+
+    def test_the_request_budget_is_limited(
+        self, writer: RemoteWriter, rsps: responses.RequestsMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rsps.add(responses.POST, URL, status=400, body="duplicate sample for timestamp")
+        points = [point(float(i), 1000 + i) for i in range(500)]
+        with caplog.at_level(logging.WARNING):
+            first = writer.send(points)
+            writer.send(points)
+        assert len(rsps.calls) == 2 * MAX_REQUESTS_PER_SEND
+        assert (first.sent, first.rejected, first.failure) == (0, 500, None)
+        assert len(first.delivered) == 500
+        gave_up = [r for r in caplog.records if "gave up isolating" in r.getMessage()]
+        assert len(gave_up) == 1
+        assert "after 64 requests" in gave_up[0].getMessage()
+
+    def test_later_chunks_wait_when_the_budget_is_spent(
+        self, writer: RemoteWriter, rsps: responses.RequestsMock
+    ) -> None:
+        rsps.add(responses.POST, URL, status=400, body="duplicate sample for timestamp")
+        points = [point(float(i), 1000 + i) for i in range(BATCH_SIZE + 5)]
+        delivery = writer.send(points)
+        assert len(rsps.calls) == MAX_REQUESTS_PER_SEND
+        assert len(delivery.delivered) == BATCH_SIZE
+
+    def test_a_server_error_during_isolation_stops_and_keeps_the_rest(
+        self, writer: RemoteWriter, rsps: responses.RequestsMock
+    ) -> None:
+        rsps.add(responses.POST, URL, status=400, body="duplicate sample for timestamp")
+        rsps.add(responses.POST, URL, status=204)
+        rsps.add(responses.POST, URL, status=503, body="down")
+        points = [point(float(i), 1000 + i) for i in range(4)]
+        delivery = writer.send(points)
+        assert delivery.failure == "server_error"
+        assert delivery.sent == 2
+        assert delivery.delivered == points[:2]
+        assert len(rsps.calls) == 3

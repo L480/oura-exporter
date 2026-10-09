@@ -14,6 +14,7 @@ from oura_exporter.points import Point
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 5000
+MAX_REQUESTS_PER_SEND = 64
 SNAPPY_CHUNK = 65536
 EXCERPT_LIMIT = 200
 HEADERS = {
@@ -98,6 +99,7 @@ class Delivery:
     sent: int = 0
     rejected: int = 0
     failure: str | None = None
+    requests: int = 0
 
 
 class RemoteWriter:
@@ -116,19 +118,25 @@ class RemoteWriter:
         self._wall = wall
         self._warned: set[str] = set()
         self._failure: str | None = None
+        self._gave_up = False
         self.last_success: float | None = None
 
     def send(self, points: Sequence[Point]) -> Delivery:
         delivery = Delivery()
         ordered = sorted(points, key=lambda point: (point.key, point.timestamp_ms))
         for start in range(0, len(ordered), BATCH_SIZE):
-            batch = ordered[start : start + BATCH_SIZE]
-            if not self._post(batch, delivery):
+            if delivery.requests >= MAX_REQUESTS_PER_SEND:
+                break
+            if not self._push(ordered[start : start + BATCH_SIZE], delivery, isolating=False):
                 break
         return delivery
 
-    def _post(self, batch: Sequence[Point], delivery: Delivery) -> bool:
+    def _push(self, batch: Sequence[Point], delivery: Delivery, *, isolating: bool) -> bool:
+        if isolating and delivery.requests >= MAX_REQUESTS_PER_SEND:
+            self._give_up(batch, delivery)
+            return True
         body = snappy_literal(encode_write_request(batch))
+        delivery.requests += 1
         try:
             response = self._session.post(
                 self._url, data=body, headers=HEADERS, auth=self._auth, timeout=TIMEOUT
@@ -139,10 +147,10 @@ class RemoteWriter:
         status = response.status_code
         if 200 <= status < 300:
             delivery.sent += len(batch)
-        elif status == 400:
-            delivery.rejected += len(batch)
-            self._warn_rejected(response.text)
-        else:
+            delivery.delivered.extend(batch)
+            self._responded()
+            return True
+        if status != 400:
             reason = (
                 "rate_limited"
                 if status == 429
@@ -152,12 +160,32 @@ class RemoteWriter:
             )
             self._failed(delivery, reason, f"HTTP {status}: {_excerpt(response.text)}")
             return False
+        self._warn_rejected(response.text)
+        self._responded()
+        if len(batch) == 1:
+            delivery.rejected += 1
+            delivery.delivered.extend(batch)
+            return True
+        middle = len(batch) // 2
+        return self._push(batch[:middle], delivery, isolating=True) and self._push(
+            batch[middle:], delivery, isolating=True
+        )
+
+    def _give_up(self, batch: Sequence[Point], delivery: Delivery) -> None:
+        delivery.rejected += len(batch)
         delivery.delivered.extend(batch)
+        if not self._gave_up:
+            self._gave_up = True
+            logger.warning(
+                "remote write: gave up isolating rejected samples after %d requests",
+                delivery.requests,
+            )
+
+    def _responded(self) -> None:
         self.last_success = self._wall()
         if self._failure is not None:
             logger.info("remote write recovered after %s failure", self._failure)
             self._failure = None
-        return True
 
     def _failed(self, delivery: Delivery, reason: str, detail: str) -> None:
         delivery.failure = reason
