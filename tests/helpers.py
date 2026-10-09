@@ -97,6 +97,55 @@ class FakeClock:
 
 WALL = datetime(2026, 10, 6, 16, 0, tzinfo=UTC).timestamp()
 CATEGORY_ORDER = tuple(category.name for category in load_definitions())
+FUTURE_LIMIT_MS = 600_000
+type SeriesKey = tuple[str, tuple[tuple[str, str], ...]]
+
+
+class FakeTsdb:
+    def __init__(self, wall: FakeClock, ooo_window_s: float = 7 * 86400) -> None:
+        self._wall = wall
+        self._window_ms = round(ooo_window_s * 1000)
+        self.samples: dict[SeriesKey, dict[int, float]] = {}
+        self.head: dict[SeriesKey, int] = {}
+        self.requests = 0
+
+    def handle(self, request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        self.requests += 1
+        samples = {key: dict(values) for key, values in self.samples.items()}
+        head = dict(self.head)
+        error = self._apply(decode_write_request(request.body), samples, head)
+        if error is not None:
+            return 400, {}, error
+        self.samples, self.head = samples, head
+        return 204, {}, ""
+
+    def _apply(
+        self,
+        request: dict[SeriesKey, list[tuple[int, float]]],
+        samples: dict[SeriesKey, dict[int, float]],
+        head: dict[SeriesKey, int],
+    ) -> str | None:
+        limit = round(self._wall() * 1000) + FUTURE_LIMIT_MS
+        for key, series in request.items():
+            for timestamp, value in series:
+                if timestamp > limit:
+                    return "out of bounds: timestamp is too far in the future"
+                stored = samples.setdefault(key, {})
+                top = head.get(key)
+                if top is None or timestamp > top:
+                    stored[timestamp] = value
+                    head[key] = timestamp
+                elif timestamp == top:
+                    if stored[timestamp] != value:
+                        return (
+                            f"duplicate sample for timestamp {timestamp}; overrides not allowed: "
+                            f"existing {stored[timestamp]}, new value {value}"
+                        )
+                elif timestamp < max(head.values()) - self._window_ms:
+                    return "out of bounds: timestamp is too old"
+                else:
+                    stored.setdefault(timestamp, value)
+        return None
 
 
 @dataclass
@@ -106,6 +155,14 @@ class Rig:
     mono: FakeClock
     wall: FakeClock
     rsps: responses.RequestsMock
+    tsdb: FakeTsdb
+
+    def stored(self, name: str, **labels: str) -> list[tuple[int, float]]:
+        found: list[tuple[int, float]] = []
+        for (series_name, series_labels), values in self.tsdb.samples.items():
+            if series_name == name and labels.items() <= dict(series_labels).items():
+                found += values.items()
+        return sorted(found)
 
     def advance(self, seconds: float) -> None:
         self.mono.advance(seconds)
@@ -181,8 +238,9 @@ def build_rig(
         wall=wall,
     )
     register_endpoints(rsps)
-    rsps.add(responses.POST, WRITE_URL, status=204)
-    return Rig(exporter, tokens, mono, wall, rsps)
+    tsdb = FakeTsdb(wall)
+    rsps.add_callback(responses.POST, WRITE_URL, callback=tsdb.handle)
+    return Rig(exporter, tokens, mono, wall, rsps, tsdb)
 
 
 def _write_request_class() -> Any:
