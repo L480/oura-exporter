@@ -27,6 +27,9 @@ storage:
 
 Mimir and Grafana Cloud: enable the out-of-order window for the tenant (`out_of_order_time_window`).
 
+A receiver keeps the first value of a timestamp, so values Oura still revises (the last activity
+slot of today, a sleep period that just ended) are held back until they settle.
+
 ## Quick start
 
 1. Create an application in the [Oura developer portal](https://cloud.ouraring.com/oauth/applications)

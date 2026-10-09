@@ -62,6 +62,11 @@ Prometheus also needs `--web.enable-remote-write-receiver`. For Mimir and Grafan
 `out_of_order_time_window` for the tenant. Without it the receiver answers HTTP 400 ("too old")
 and `oura_exporter_remote_write_samples_total{result="rejected"}` grows.
 
+A receiver cannot overwrite a sample. Prometheus remote write 1.0 drops a whole request at the
+first conflicting sample (same timestamp as the newest sample of the series, other value). The
+exporter answers a rejected batch (HTTP 400) by splitting it in halves, at most 64 requests per
+push, until it knows which samples are refused; everything else is stored.
+
 `/metrics` carries only the exporter's own health, scrape it like any exporter:
 
 ```yaml
@@ -81,10 +86,10 @@ about a day before it, and a late ring sync can add samples long after the fact.
   of at most 30 days (7 for heart rate and battery), and follows `next_token`. Nothing is
   fetched from a watermark: phone heart rate and late ring syncs can add older samples later.
   Samples older than the window are dropped.
-- **De-duplication.** The exporter remembers which `(series, timestamp)` it delivered and only
-  sends new or changed samples. The memory is updated after a successful push only, so failures
-  retry in the next cycle. After a restart the whole window is sent again, identical duplicates
-  are harmless.
+- **De-duplication.** Each `(series, timestamp)` is sent at most once. The exporter remembers
+  what it delivered; the memory is updated after a successful push only, so failures retry in the
+  next cycle. After a restart the whole window is sent again: identical samples are harmless,
+  samples that differ from what is stored are isolated and counted as rejected.
 - **Samples** (`heartrate`, `ring_battery_level`) sit at their own `timestamp`.
 - **Events** (`sleep`, `workout`, `session`, `enhanced_tag`, `rest_mode_period`) sit at one
   time of the document: sleep at `bedtime_end`, workouts and sessions at `start_datetime`, tags
@@ -104,12 +109,12 @@ about a day before it, and a late ring sync can add samples long after the fact.
   ended in the local time zone, at 23:59:59 of that day. `last_over_time(x[1d])` per day then
   gives the final value.
 - **Profile** (`personal_info`, `ring_configuration`) is pushed at fetch time, refreshed hourly.
-- **Revisions.** A value that changes after it was delivered (a sleep document that grows, a
-  day revised after it settled) is sent again and counted in
-  `oura_exporter_sample_revisions_total`, the details are logged at debug. What the receiver does
-  with it differs: Prometheus 3.15 overwrote the value of a sample inside its out-of-order window
-  in testing, a receiver that keeps the first value answers HTTP 400, which shows up as
-  `rejected`.
+- **Revisions.** A receiver keeps the first value of a timestamp, so values Oura still revises
+  are held back instead of pushed early. Activity series (`met`, `class_5_min`) of a day that has
+  not settled stop before the last `class_5_min` slot, the one holding the last synced minute
+  (Oura pads `met` with 0.9 up to the end of the day). Sleep periods are pushed 3 hours after
+  they ended. A value that changes after it was delivered anyway is not sent again; it is
+  counted in `oura_exporter_sample_revisions_total{category}`, the details are logged at debug.
 - **Missing values.** A field Oura reports as `null`, for example because a scope was not
   granted or there is not enough data, is left out.
 - **Errors.** A failed fetch leaves the category as it is. A failed push is retried with the
@@ -152,10 +157,10 @@ up new blocks without a restart. Mimir and Grafana Cloud need their own import p
 | `oura_exporter_category_up{category}` | 1 if the last fetch succeeded, 0 if it failed or was skipped because a rate limit or an authentication failure ended the cycle. |
 | `oura_exporter_category_last_success_timestamp_seconds{category}` | Time of the last successful fetch. |
 | `oura_exporter_category_errors_total{category,reason}` | Failed fetches. Reasons: `network`, `invalid_response`, `auth`, `forbidden`, `rate_limited`, `http_error`, `internal`. |
-| `oura_exporter_remote_write_samples_total{result}` | Pushed samples: `sent`, or `rejected` (a batch the receiver answered with HTTP 400; it stores the rest but does not say which samples). |
+| `oura_exporter_remote_write_samples_total{result}` | Pushed samples: `sent`, or `rejected` (samples the receiver refused with HTTP 400, found by splitting the batch). |
 | `oura_exporter_remote_write_failures_total{reason}` | Failed requests, retried next cycle. Reasons: `network`, `rate_limited`, `server_error`, `client_error`. |
 | `oura_exporter_remote_write_last_success_timestamp_seconds` | Time of the last successful request. |
-| `oura_exporter_sample_revisions_total` | Samples whose value changed after delivery and were sent again. |
+| `oura_exporter_sample_revisions_total{category}` | Samples Oura changed after delivery; not sent again. |
 
 The standard `process_*` metrics and `python_info` are exposed as well.
 
@@ -186,8 +191,9 @@ groups:
 
 - Data only arrives when the Oura app syncs with the ring. Sleep data needs the app to be
   opened; activity and stress may sync in the background.
-- Daily values are revised by Oura. A day is pushed as final 12 hours after it ended; later
-  revisions are sent again and counted, whether the receiver applies them depends on it.
+- Daily values are revised by Oura. A day is pushed as final 12 hours after it ended, sleep 3
+  hours after it ended; later revisions are counted, not sent, because a receiver cannot
+  overwrite a sample.
 - Everything inside `OURA_LOOKBACK_DAYS` is read again in every poll, which costs one request
   per category and range. Raise `OURA_POLL_INTERVAL` before raising the lookback.
 - HTTP 403 means the scope was not granted or the Oura membership has expired. The category is

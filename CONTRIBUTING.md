@@ -48,7 +48,11 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
   `end_path` for `<prefix>duration_seconds`) or `single` (profile). `labels` turn low-cardinality
   string fields into labels (never free text), `series` export embedded time series: `type:
   samples` for `{interval, items, timestamp}` objects, `type: string` for digit strings with a
-  fixed `interval` and a `start` path.
+  fixed `interval` and a `start` path. In a `daily` category one `type: string` series can set
+  `sync_horizon: true`: while a day has not settled, the series of its document stop before the
+  last slot of that string (the slot Oura is still filling).
+- An `event` category can set `settle_delay` (seconds): the document is skipped until that long
+  after its end (`end_path`, else `time_path`).
 - Enums are gauges with a `mapping` to numbers; document the codes in `help`.
 - A category also takes optional `title` and `summary` keys for the README list. The
   defaults are the name with spaces, and `daily value`, `every sample`, `every event` or
@@ -75,8 +79,9 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
    tolerant and drops a series instead of failing the category.
 5. **`/metrics` only starts after authentication succeeded**, and the exporter has to keep
    working with `--read-only --cap-drop=ALL --security-opt no-new-privileges`.
-6. **Samples are only recorded as delivered after a successful push**, and a sample that is
-   already delivered with another value is never resent silently (it is counted).
+6. **A (series, timestamp) is sent at most once**; a later value is counted, never sent
+   (receivers cannot overwrite, Prometheus drops the whole request on such a conflict).
+7. **Values Oura still revises are not pushed** (sync horizon, settle delay).
 
 ## Commits
 
