@@ -23,9 +23,11 @@ DEFAULT_SCOPES = (
 )
 DEFAULT_TOKEN_PATH = "~/.config/oura-exporter/oauth_token.json"  # noqa: S105
 DEFAULT_API_BASE_URL = "https://api.ouraring.com"
-DEFAULT_POLL_INTERVAL = 300
+DEFAULT_POLL_INTERVAL = 120
+DEFAULT_FETCH_INTERVAL = 600
 DEFAULT_LOOKBACK_DAYS = 3
 MIN_POLL_INTERVAL = 60
+MIN_FETCH_INTERVAL = 60
 DEFAULT_PORT = 8000
 DEFAULT_LISTEN_ADDRESS = "0.0.0.0"  # noqa: S104
 
@@ -110,6 +112,7 @@ class Settings:
     auth_code: str | None
     auth_code_file: Path | None
     poll_interval: int
+    fetch_interval: int
     lookback_days: int
     remote_write_url: str | None
     remote_write_username: str | None
@@ -194,6 +197,18 @@ class Settings:
             else _integer("OURA_POLL_INTERVAL", poll_value, MIN_POLL_INTERVAL)
         )
 
+        fetch_value = _get(environ, "OURA_FETCH_INTERVAL")
+        fetch_interval = (
+            DEFAULT_FETCH_INTERVAL
+            if fetch_value is None
+            else _integer("OURA_FETCH_INTERVAL", fetch_value, MIN_FETCH_INTERVAL)
+        )
+        if fetch_interval < poll_interval:
+            raise ConfigError(
+                f"OURA_FETCH_INTERVAL ({fetch_interval}) must not be below "
+                f"OURA_POLL_INTERVAL ({poll_interval})"
+            )
+
         lookback_value = _get(environ, "OURA_LOOKBACK_DAYS")
         lookback_days = (
             DEFAULT_LOOKBACK_DAYS
@@ -254,6 +269,7 @@ class Settings:
             auth_code=auth_code,
             auth_code_file=Path(auth_code_file) if auth_code_file is not None else None,
             poll_interval=poll_interval,
+            fetch_interval=fetch_interval,
             lookback_days=lookback_days,
             remote_write_url=remote_write_url,
             remote_write_username=username,

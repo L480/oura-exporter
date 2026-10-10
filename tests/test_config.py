@@ -55,7 +55,8 @@ def test_defaults() -> None:
     assert settings.auth_code_file is None
     assert not settings.has_auth_code
     assert settings.read_auth_code() is None
-    assert settings.poll_interval == 300
+    assert settings.poll_interval == 120
+    assert settings.fetch_interval == 600
     assert settings.metrics_config is None
     assert settings.api_base_url == "https://api.ouraring.com"
     assert settings.token_url == "https://api.ouraring.com/oauth/token"
@@ -78,6 +79,7 @@ def test_values_are_stripped_and_empty_means_unset() -> None:
             "OURA_REDIRECT_URI": "   ",
             "PORT": "",
             "OURA_POLL_INTERVAL": " ",
+            "OURA_FETCH_INTERVAL": " ",
             "LOGLEVEL": "",
             "OURA_SCOPES": "",
             "OURA_AUTH_CODE": "  ",
@@ -90,7 +92,8 @@ def test_values_are_stripped_and_empty_means_unset() -> None:
     assert settings.remote_write_password is None
     assert settings.redirect_uri == "http://localhost:8000/callback"
     assert settings.port == 8000
-    assert settings.poll_interval == 300
+    assert settings.poll_interval == 120
+    assert settings.fetch_interval == 600
     assert settings.log_level == logging.INFO
     assert settings.scopes[0] == "personal"
     assert settings.auth_code is None
@@ -109,7 +112,8 @@ def test_all_values() -> None:
             "OURA_SCOPES": "email  daily\tspo2 daily",
             "OURA_TOKEN_PATH": "/data/token.json",
             "OURA_AUTH_CODE": "abc",
-            "OURA_POLL_INTERVAL": "600",
+            "OURA_POLL_INTERVAL": "90",
+            "OURA_FETCH_INTERVAL": "900",
             "OURA_METRICS_CONFIG": "/etc/metrics.yml",
             "OURA_API_BASE_URL": "http://127.0.0.1:9/",
             "PORT": "9100",
@@ -128,7 +132,8 @@ def test_all_values() -> None:
     assert settings.auth_code == "abc"
     assert settings.has_auth_code
     assert settings.read_auth_code() == "abc"
-    assert settings.poll_interval == 600
+    assert settings.poll_interval == 90
+    assert settings.fetch_interval == 900
     assert settings.metrics_config == Path("/etc/metrics.yml")
     assert settings.api_base_url == "http://127.0.0.1:9"
     assert settings.token_url == "http://127.0.0.1:9/oauth/token"
@@ -176,6 +181,10 @@ def test_all_values() -> None:
         (env(OURA_POLL_INTERVAL="-1"), "OURA_POLL_INTERVAL"),
         (env(OURA_POLL_INTERVAL="soon"), "OURA_POLL_INTERVAL"),
         (env(OURA_POLL_INTERVAL="90.5"), "OURA_POLL_INTERVAL"),
+        (env(OURA_FETCH_INTERVAL="59"), "OURA_FETCH_INTERVAL"),
+        (env(OURA_FETCH_INTERVAL="soon"), "OURA_FETCH_INTERVAL"),
+        (env(OURA_POLL_INTERVAL="700"), "OURA_FETCH_INTERVAL"),
+        (env(OURA_POLL_INTERVAL="300", OURA_FETCH_INTERVAL="120"), "OURA_FETCH_INTERVAL"),
         (env(OURA_API_BASE_URL="ftp://example.org"), "OURA_API_BASE_URL"),
         (env(OURA_API_BASE_URL="https://example.org/?x=1"), "OURA_API_BASE_URL"),
         (env(OURA_API_BASE_URL="https://example.org/#frag"), "OURA_API_BASE_URL"),

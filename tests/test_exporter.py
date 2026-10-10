@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ from prometheus_client import ProcessCollector
 
 from oura_exporter import __version__
 from oura_exporter import exporter as exporter_module
+from oura_exporter.api import OuraApiError
 from oura_exporter.definitions import load_definitions
 from oura_exporter.exporter import Exporter
 from oura_exporter.remote_write import RemoteWriter
@@ -55,8 +57,24 @@ def poll_records(caplog: pytest.LogCaptureFixture, level: int) -> list[logging.L
     ]
 
 
+def api_calls(rig: Rig) -> list[responses.Call]:
+    return [call for call in rig.rsps.calls if call.request.method == "GET"]
+
+
 def sent(rig: Rig) -> float | None:
     return rig.value("oura_exporter_remote_write_samples_total", result="sent")
+
+
+@pytest.fixture
+def decoupled(tmp_path: Any, rsps: responses.RequestsMock) -> Iterator[Rig]:
+    sessions: list[requests.Session] = []
+    yield build_rig(tmp_path, rsps, sessions, poll_interval=120, fetch_interval=600)
+    for session in sessions:
+        session.close()
+
+
+def stamp(offset: float) -> int:
+    return int((WALL + offset) * 1000)
 
 
 class TestFullPoll:
@@ -156,7 +174,7 @@ class TestDeduplication:
         assert "oura_daily_readiness_score" in names
         assert "oura_heartrate_bpm" not in names
         assert "oura_sleep_heart_rate_bpm" not in names
-        assert "oura_personal_info_age_years" not in names
+        assert "oura_personal_info_age_years" in names
 
     def test_new_samples_appear_as_they_arrive(self, rig: Rig) -> None:
         rig.exporter.poll()
@@ -219,7 +237,7 @@ class TestRemoteWriteResults:
         assert {(ts, value) for ts, value in rig.pushed("oura_heartrate_bpm")} >= {
             (int(epoch("2026-10-06T07:09:00+00:00") * 1000), 57.0)
         }
-        assert len(rig.calls("personal_info")) == 2
+        assert len(rig.calls("personal_info")) == 1
         assert set(rig.pushed("oura_personal_info_age_years")) == {(int(WALL * 1000), 34.0)}
         assert rig.value("oura_exporter_remote_write_last_success_timestamp_seconds") == WALL
 
@@ -314,6 +332,7 @@ class TestRestartAfterRevision:
                 rig.tokens,
                 load_definitions(),
                 RemoteWriter(sessions[-1], WRITE_URL, wall=rig.wall),
+                300,
                 300,
                 3,
                 monotonic=rig.mono,
@@ -604,9 +623,9 @@ class TestAbortedCycles:
         assert rig.up("personal_info") == 1
 
         rig.advance(300)
-        calls = len(rig.rsps.calls)
+        calls = len(api_calls(rig))
         rig.exporter.poll()
-        assert len(rig.rsps.calls) == calls
+        assert len(api_calls(rig)) == calls
         assert rig.up("personal_info") == 0
         assert error_reasons(rig, "personal_info") == set()
 
@@ -762,6 +781,7 @@ class TestChunking:
                 load_definitions(),
                 RemoteWriter(sessions[-1], WRITE_URL),
                 300,
+                300,
                 20,
                 monotonic=rig.mono,
                 wall=rig.wall,
@@ -788,6 +808,7 @@ class TestRunLoop:
                 rig.tokens,
                 load_definitions(),
                 RemoteWriter(sessions[-1], WRITE_URL),
+                0.01,
                 0.01,
                 3,
             )
@@ -837,3 +858,173 @@ class TestRunLoop:
         stop.set()
         rig.exporter.run(stop)
         assert len(rig.rsps.calls) == 0
+
+
+class TestDecoupledFetching:
+    def test_fetches_follow_their_own_interval(self, decoupled: Rig) -> None:
+        for _ in range(10):
+            decoupled.exporter.poll()
+            decoupled.advance(120)
+        assert len(decoupled.calls("daily_readiness")) == 2
+        assert len(decoupled.calls("personal_info")) == 1
+        assert len(decoupled.calls("ring_configuration")) == 1
+        assert decoupled.value("oura_exporter_category_fetches_total", category="sleep") == 2
+        assert (
+            decoupled.value("oura_exporter_category_fetches_total", category="personal_info") == 1
+        )
+
+    def test_fetch_counter_starts_at_zero_and_ignores_failures(
+        self, decoupled: Rig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for category in CATEGORIES:
+            assert decoupled.value("oura_exporter_category_fetches_total", category=category) == 0
+        decoupled.exporter.poll()
+        assert all(
+            decoupled.value("oura_exporter_category_fetches_total", category=category) == 1
+            for category in CATEGORIES
+        )
+        decoupled.advance(600)
+        monkeypatch.setattr(decoupled.exporter._fetcher, "fetch", self.failing)
+        decoupled.exporter.poll()
+        assert decoupled.value("oura_exporter_category_fetches_total", category="sleep") == 1
+        assert decoupled.errors("sleep", "network") == 1
+
+    @staticmethod
+    def failing(*_args: Any, **_kwargs: Any) -> Any:
+        raise OuraApiError("down", "network")
+
+    def test_newest_daily_value_and_single_documents_are_pushed_every_cycle(
+        self, decoupled: Rig
+    ) -> None:
+        for _ in range(5):
+            decoupled.exporter.poll()
+            decoupled.advance(120)
+        expected = [(stamp(120 * i)) for i in range(5)]
+        score = decoupled.pushed("oura_daily_readiness_score")
+        assert [ts for ts, value in score if value == 86.0] == expected
+        age = decoupled.pushed("oura_personal_info_age_years")
+        assert [ts for ts, _ in age] == expected
+        assert len(decoupled.pushed("oura_heartrate_bpm")) == 4
+
+    def test_a_cache_older_than_three_fetch_intervals_is_not_pushed(
+        self,
+        decoupled: Rig,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        decoupled.exporter.poll()
+        real = decoupled.exporter._fetcher.fetch
+        monkeypatch.setattr(decoupled.exporter._fetcher, "fetch", self.failing)
+        with caplog.at_level(logging.INFO, logger="oura_exporter.exporter"):
+            for _ in range(20):
+                decoupled.advance(120)
+                decoupled.exporter.poll()
+            score = [ts for ts, _ in decoupled.pushed("oura_daily_readiness_score")]
+            assert max(score) == stamp(1680)
+            age = [ts for ts, _ in decoupled.pushed("oura_personal_info_age_years")]
+            assert max(age) == stamp(2400)
+            stale = [r for r in poll_records(caplog, logging.INFO) if "older than" in r.message]
+            assert len(stale) == len(CATEGORIES) - len(SINGLES)
+            assert decoupled.up("sleep") == 0
+
+            monkeypatch.setattr(decoupled.exporter._fetcher, "fetch", real)
+            decoupled.advance(120)
+            decoupled.exporter.poll()
+        assert max(ts for ts, _ in decoupled.pushed("oura_daily_readiness_score")) == stamp(2520)
+        assert decoupled.up("sleep") == 1
+        resumed = [r for r in poll_records(caplog, logging.INFO) if "pushing values" in r.message]
+        assert len(resumed) == len(stale)
+
+    def test_a_rate_limit_stops_fetching_but_not_pushing(self, decoupled: Rig) -> None:
+        decoupled.exporter.poll()
+        decoupled.advance(600)
+        decoupled.rsps.replace(
+            responses.GET,
+            api_url(CATEGORY_ORDER[0]),
+            status=429,
+            headers={"Retry-After": "3600"},
+        )
+        decoupled.exporter.poll()
+        assert stamp(600) in [ts for ts, _ in decoupled.pushed("oura_daily_readiness_score")]
+        before = len(api_calls(decoupled))
+        decoupled.advance(120)
+        decoupled.exporter.poll()
+        assert len(api_calls(decoupled)) == before
+        assert stamp(720) in [ts for ts, _ in decoupled.pushed("oura_daily_readiness_score")]
+        assert decoupled.up("daily_readiness") == 0
+
+    def test_an_authentication_failure_stops_later_fetches_but_not_pushing(
+        self, decoupled: Rig
+    ) -> None:
+        decoupled.exporter.poll()
+        decoupled.advance(600)
+        decoupled.rsps.replace(responses.GET, api_url(CATEGORY_ORDER[0]), status=401)
+        decoupled.rsps.post(
+            TOKEN_URL,
+            json={"access_token": "access-2", "refresh_token": "refresh-2", "expires_in": 3600},
+        )
+        decoupled.exporter.poll()
+        assert decoupled.value("oura_exporter_auth_ok") == 0
+        assert len(decoupled.calls("daily_readiness")) == 1
+        assert stamp(600) in [ts for ts, _ in decoupled.pushed("oura_daily_readiness_score")]
+
+    def test_settled_samples_are_pushed_from_the_cache_without_a_fetch(
+        self, tmp_path: Any, rsps: responses.RequestsMock
+    ) -> None:
+        sessions: list[requests.Session] = []
+        try:
+            rig = build_rig(tmp_path, rsps, sessions, poll_interval=3600, fetch_interval=86400)
+            rig.wall.now = epoch("2026-10-06T11:00:00+00:00")
+            rig.exporter.poll()
+            settled = int(epoch("2026-10-05T23:59:59+00:00") * 1000)
+            assert (settled, 80.0) not in rig.pushed("oura_daily_readiness_score")
+            rig.advance(3600)
+            rig.exporter.poll()
+            assert (settled, 80.0) in rig.pushed("oura_daily_readiness_score")
+            assert len(rig.calls("daily_readiness")) == 1
+        finally:
+            for session in sessions:
+                session.close()
+
+    def test_unexpected_fetch_errors_are_logged_once_and_keep_the_cache(
+        self,
+        decoupled: Rig,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        decoupled.exporter.poll()
+        real = decoupled.exporter._fetcher.fetch
+
+        def explode(category: Any, *args: Any, **kwargs: Any) -> Any:
+            if category.name == "sleep":
+                raise RuntimeError("bug")
+            return real(category, *args, **kwargs)
+
+        monkeypatch.setattr(decoupled.exporter._fetcher, "fetch", explode)
+        with caplog.at_level(logging.DEBUG, logger="oura_exporter.exporter"):
+            for _ in range(2):
+                decoupled.advance(600)
+                decoupled.exporter.poll()
+        assert decoupled.errors("sleep", "internal") == 2
+        assert len(poll_records(caplog, logging.ERROR)) == 1
+        assert decoupled.up("sleep") == 0
+        assert decoupled.up("daily_readiness") == 1
+
+    def test_a_sample_building_error_clears_when_it_stops(
+        self, decoupled: Rig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real = exporter_module.build_points
+        broken = True
+
+        def flaky(category: Any, *args: Any, **kwargs: Any) -> Any:
+            if broken and category.name == "daily_stress":
+                raise RuntimeError("bug")
+            return real(category, *args, **kwargs)
+
+        monkeypatch.setattr(exporter_module, "build_points", flaky)
+        decoupled.exporter.poll()
+        assert decoupled.up("daily_stress") == 0
+        broken = False
+        decoupled.advance(120)
+        decoupled.exporter.poll()
+        assert decoupled.up("daily_stress") == 1

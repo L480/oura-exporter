@@ -116,6 +116,7 @@ def _serve(settings: Settings) -> int:
                     settings.remote_write_password,
                 ),
                 settings.poll_interval,
+                settings.fetch_interval,
                 settings.lookback_days,
             )
             try:

@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from prometheus_client import (
     CollectorRegistry,
@@ -24,12 +25,17 @@ from oura_exporter.remote_write import RemoteWriter
 logger = logging.getLogger(__name__)
 
 FORBIDDEN_RETRY_SECONDS = 3600.0
+STALE_FACTOR = 3
 
 
 @dataclass(slots=True)
 class CategoryState:
     next_due: float = 0.0
     failure: str | None = None
+    documents: list[Any] | None = None
+    fetched_at: float = 0.0
+    stale: bool = False
+    build_failed: bool = False
 
 
 class Exporter:
@@ -40,6 +46,7 @@ class Exporter:
         categories: Sequence[Category],
         writer: RemoteWriter,
         poll_interval: float,
+        fetch_interval: float,
         lookback_days: int,
         *,
         monotonic: Callable[[], float] = time.monotonic,
@@ -52,6 +59,7 @@ class Exporter:
         self._tokens = tokens
         self._categories = tuple(categories)
         self._poll_interval = poll_interval
+        self._fetch_interval = fetch_interval
         self._monotonic = monotonic
         self._wall = wall
         self._states = {category.name: CategoryState() for category in self._categories}
@@ -94,6 +102,14 @@ class Exporter:
             ["category"],
             registry=self.registry,
         )
+        self._fetches = Counter(
+            "oura_exporter_category_fetches",
+            "Successful fetches of the category.",
+            ["category"],
+            registry=self.registry,
+        )
+        for category in self._categories:
+            self._fetches.labels(category.name)
         self._errors = Counter(
             "oura_exporter_category_errors",
             "Failed fetches of the category by reason.",
@@ -141,49 +157,28 @@ class Exporter:
                 return
 
     def poll(self, stop: threading.Event | None = None) -> None:
-        if self._monotonic() < self._paused_until:
-            logger.debug("paused after a rate limit; skipping this cycle")
-            self._mark_not_refreshed(self._categories)
-            return
+        fetching = self._monotonic() >= self._paused_until
+        if not fetching:
+            logger.debug("paused after a rate limit; skipping fetches this cycle")
         self._cycle_fetched = False
-        for index, category in enumerate(self._categories):
+        for category in self._categories:
             if stop is not None and stop.is_set():
                 return
             state = self._states[category.name]
             now = self._monotonic()
-            if now < state.next_due:
-                continue
-            if not self._poll_category(category, state, now):
-                self._mark_not_refreshed(self._categories[index + 1 :])
-                return
+            if now >= state.next_due:
+                if fetching:
+                    fetching = self._fetch_category(category, state, now)
+                else:
+                    self._up.labels(category.name).set(0)
+            self._push_cached(category, state)
 
-    def _mark_not_refreshed(self, categories: Sequence[Category]) -> None:
-        now = self._monotonic()
-        for category in categories:
-            if now >= self._states[category.name].next_due:
-                self._up.labels(category.name).set(0)
-
-    def _poll_category(self, category: Category, state: CategoryState, now: float) -> bool:
+    def _fetch_category(self, category: Category, state: CategoryState, now: float) -> bool:
         moment = datetime.fromtimestamp(self._wall(), tz=UTC)
         cutoff = moment - self._lookback
         try:
-            documents = self._fetcher.fetch(category, cutoff, moment)
-            documents = list(documents)
+            documents = list(self._fetcher.fetch(category, cutoff, moment))
             known = synced_until(category, documents)
-            if known is not None and (self._synced_until is None or known > self._synced_until):
-                self._synced_until = known
-            synced = None
-            if self._tracks_sync:
-                synced = self._synced_until or datetime.fromtimestamp(0, tz=UTC)
-            points = build_points(
-                category,
-                documents,
-                moment,
-                live=True,
-                cutoff=cutoff,
-                synced_until=synced,
-                warned=self._warned,
-            )
         except RateLimitedError as exc:
             self._paused_until = now + exc.retry_after
             self._failed(category, state, "rate_limited", now, exc)
@@ -206,18 +201,64 @@ class Exporter:
                 logger.exception("%s: unexpected error while fetching", category.name)
             self._failed(category, state, "internal", now, exc)
             return True
+        if known is not None and (self._synced_until is None or known > self._synced_until):
+            self._synced_until = known
+        state.documents = documents
+        state.fetched_at = now
         self._cycle_fetched = True
+        self._fetches.labels(category.name).inc()
         self._succeeded(category, state, now)
-        self._deliver(category, state, points, cutoff, now)
         return True
+
+    def _push_cached(self, category: Category, state: CategoryState) -> None:
+        if state.documents is None:
+            return
+        now = self._monotonic()
+        limit = STALE_FACTOR * (category.refresh_interval or self._fetch_interval)
+        if now - state.fetched_at >= limit:
+            if not state.stale:
+                state.stale = True
+                logger.info(
+                    "%s: last fetch is older than %ds; not pushing cached values",
+                    category.name,
+                    limit,
+                )
+            return
+        if state.stale:
+            state.stale = False
+            logger.info("%s: fetching again, pushing values", category.name)
+        moment = datetime.fromtimestamp(self._wall(), tz=UTC)
+        cutoff = moment - self._lookback
+        try:
+            synced = None
+            if self._tracks_sync:
+                synced = self._synced_until or datetime.fromtimestamp(0, tz=UTC)
+            points = build_points(
+                category,
+                state.documents,
+                moment,
+                live=True,
+                cutoff=cutoff,
+                synced_until=synced,
+                warned=self._warned,
+            )
+        except Exception:
+            if not state.build_failed:
+                logger.exception("%s: unexpected error while building samples", category.name)
+                state.build_failed = True
+            self._up.labels(category.name).set(0)
+            self._errors.labels(category.name, "internal").inc()
+            return
+        if state.build_failed and state.failure is None:
+            self._up.labels(category.name).set(1)
+        state.build_failed = False
+        self._deliver(category, points, cutoff)
 
     def _deliver(
         self,
         category: Category,
-        state: CategoryState,
         points: Sequence[Point],
         cutoff: datetime,
-        now: float,
     ) -> None:
         fresh, revised = self._log.split(points)
         if revised:
@@ -232,7 +273,6 @@ class Exporter:
                 self._write_success.set(self._writer.last_success)
             if delivery.failure is not None:
                 self._failures.labels(delivery.failure).inc()
-                state.next_due = now
         self._log.prune(cutoff)
         logger.debug("%s: %d samples in the window, %d new", category.name, len(points), len(fresh))
 
@@ -240,7 +280,7 @@ class Exporter:
         self._up.labels(category.name).set(1)
         self._last_success.labels(category.name).set(self._wall())
         self._auth_ok.set(1)
-        state.next_due = now + (category.refresh_interval or self._poll_interval)
+        state.next_due = now + (category.refresh_interval or self._fetch_interval)
         if state.failure is not None:
             logger.info("%s: recovered after %s failure", category.name, state.failure)
             state.failure = None

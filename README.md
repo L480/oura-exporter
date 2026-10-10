@@ -14,7 +14,7 @@ Oura delivers data late, in bulk and with timestamps in the past, which a scrape
 represent. The exporter therefore **pushes samples with their real measurement time via
 Prometheus remote write** and only serves its own health metrics on `/metrics`.
 
-The receiver must accept remote write and out-of-order samples. Every poll re-reads the last
+The receiver must accept remote write and out-of-order samples. Every fetch re-reads the last
 `OURA_LOOKBACK_DAYS` (default 3), so the out-of-order window has to be at least that long.
 
 Prometheus: start it with `--web.enable-remote-write-receiver` and add to `prometheus.yml`:

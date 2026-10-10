@@ -209,7 +209,12 @@ class Rig:
 
 
 def build_rig(
-    tmp_path: Path, rsps: responses.RequestsMock, sessions: list[requests.Session]
+    tmp_path: Path,
+    rsps: responses.RequestsMock,
+    sessions: list[requests.Session],
+    *,
+    poll_interval: float = 300,
+    fetch_interval: float = 300,
 ) -> Rig:
     session = build_session()
     oauth_session = build_session(retries=False)
@@ -232,7 +237,8 @@ def build_rig(
         tokens,
         load_definitions(),
         RemoteWriter(write_session, WRITE_URL, wall=wall),
-        300,
+        poll_interval,
+        fetch_interval,
         3,
         monotonic=mono,
         wall=wall,

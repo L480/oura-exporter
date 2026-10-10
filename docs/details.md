@@ -82,7 +82,13 @@ about a day before it, and a late ring sync can add samples long after the fact.
 
 ## How values behave
 
-- **Window.** Every poll fetches `[now - OURA_LOOKBACK_DAYS, now]` of every category, in ranges
+- **Fetch and push.** Every `OURA_FETCH_INTERVAL` (default 600 s; 3600 s for the profile) a
+  category is fetched from the Oura API. Every `OURA_POLL_INTERVAL` (default 120 s) the exporter
+  pushes from the documents of the last successful fetch, without API requests. A category whose
+  last fetch is older than 3 fetch intervals is no longer pushed, so a long outage shows up as
+  stale series (logged once at info, and again when it recovers). A failed fetch keeps the cache
+  and is retried in the next cycle.
+- **Window.** Every fetch reads `[now - OURA_LOOKBACK_DAYS, now]` of every category, in ranges
   of at most 30 days (7 for heart rate and battery), and follows `next_token`. Nothing is
   fetched from a watermark: phone heart rate and late ring syncs can add older samples later.
   Samples older than the window are dropped.
@@ -104,11 +110,12 @@ about a day before it, and a late ring sync can add samples long after the fact.
   items are skipped. The help text of each series lists the codes.
 - **Daily documents** (`daily_*`, `sleep_time`, `vo2_max`) can be revised during the day, and a
   receiver cannot overwrite a sample. The newest document of a category is pushed at fetch time
-  in every poll, like a gauge: its current value is always within Prometheus' 5-minute lookback
-  (keep `OURA_POLL_INTERVAL` below that). Every older day is pushed once, 12 hours after it
+  in every push cycle, like a gauge: its current value is always within Prometheus' 5-minute
+  lookback (keep `OURA_POLL_INTERVAL` below that). Every older day is pushed once, 12 hours after it
   ended in the local time zone, at 23:59:59 of that day. `last_over_time(x[1d])` per day then
   gives the final value.
-- **Profile** (`personal_info`, `ring_configuration`) is pushed at fetch time, refreshed hourly.
+- **Profile** (`personal_info`, `ring_configuration`) is fetched hourly and pushed at the time of
+  every push cycle, like the newest daily document.
 - **Revisions.** A receiver keeps the first value of a timestamp, so values Oura still revises
   are held back instead of pushed early. Activity series (`met`, `class_5_min`) of a day that has
   not settled stop from the second-to-last `class_5_min` slot on, because Oura still revises the last two
@@ -119,7 +126,7 @@ about a day before it, and a late ring sync can add samples long after the fact.
 - **Missing values.** A field Oura reports as `null`, for example because a scope was not
   granted or there is not enough data, is left out.
 - **Errors.** A failed fetch leaves the category as it is. A failed push is retried with the
-  next poll. `oura_exporter_category_up` shows fetch failures.
+  next cycle. `oura_exporter_category_up` shows fetch failures.
 - **Enums** are numbers. Examples: `oura_daily_resilience_level` 1 limited, 2 adequate, 3 solid,
   4 strong, 5 exceptional; `oura_daily_stress_day_summary` 1 restored, 2 normal, 3 stressful;
   `oura_heartrate_source` 1 awake, 2 rest, 3 sleep, 4 session, 5 live, 6 workout. All codes are
@@ -157,6 +164,7 @@ up new blocks without a restart. Mimir and Grafana Cloud need their own import p
 | `oura_exporter_token_persisted` | 0 while a refreshed token could not be saved to disk. |
 | `oura_exporter_category_up{category}` | 1 if the last fetch succeeded, 0 if it failed or was skipped because a rate limit or an authentication failure ended the cycle. |
 | `oura_exporter_category_last_success_timestamp_seconds{category}` | Time of the last successful fetch. |
+| `oura_exporter_category_fetches_total{category}` | Successful fetches. |
 | `oura_exporter_category_errors_total{category,reason}` | Failed fetches. Reasons: `network`, `invalid_response`, `auth`, `forbidden`, `rate_limited`, `http_error`, `internal`. |
 | `oura_exporter_remote_write_samples_total{result}` | Pushed samples: `sent`, or `rejected` (samples the receiver refused with HTTP 400, found by splitting the batch). |
 | `oura_exporter_remote_write_failures_total{reason}` | Failed requests, retried next cycle. Reasons: `network`, `rate_limited`, `server_error`, `client_error`. |
@@ -195,11 +203,13 @@ groups:
 - Daily values are revised by Oura. A day is pushed as final 12 hours after it ended, sleep once the ring
   has synced 30 minutes after it ended; later revisions are counted, not sent, because a receiver cannot
   overwrite a sample.
-- Everything inside `OURA_LOOKBACK_DAYS` is read again in every poll, which costs one request
-  per category and range. Raise `OURA_POLL_INTERVAL` before raising the lookback.
+- Everything inside `OURA_LOOKBACK_DAYS` is read again in every fetch, which costs one request
+  per category and range. Raise `OURA_FETCH_INTERVAL` before raising the lookback.
+- Documents are cached in memory between fetches; nothing new reaches the receiver until the
+  next fetch, at most `OURA_FETCH_INTERVAL` after Oura has it.
 - HTTP 403 means the scope was not granted or the Oura membership has expired. The category is
   reported as `forbidden` and retried hourly. HTTP 401 on one category after another category was
-  fetched in the same poll is treated the same way (Oura answers 401 for a missing scope); a 401
+  fetched in the same cycle is treated the same way (Oura answers 401 for a missing scope); a 401
   on the first category still counts as an authentication failure.
 - Samples dated more than a minute ahead of the clock are dropped, the first drop per category is
   logged. Prometheus rejects them as out of bounds.
