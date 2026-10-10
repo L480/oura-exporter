@@ -236,23 +236,59 @@ class TestRemoteWriteResults:
 
 
 class TestSleepSettling:
-    def test_an_extended_sleep_period_only_reaches_the_receiver_once_settled(
-        self, rig: Rig
-    ) -> None:
-        name = "oura_sleep_total_sleep_duration_seconds"
-        rig.exporter.poll()
-        assert rig.stored(name, sleep_type="late_nap") == []
+    NAME = "oura_sleep_total_sleep_duration_seconds"
+
+    def extend_nap(self, rig: Rig, end: str) -> None:
         payload = load_fixture("sleep")
         nap = payload["data"][2]
-        nap["bedtime_end"] = "2026-10-06T15:10:00+00:00"
+        nap["bedtime_end"] = end
         nap["total_sleep_duration"] = 3000
         rig.rsps.replace(responses.GET, api_url("sleep"), json=payload)
+
+    def sync_until(self, rig: Rig, slots: int) -> None:
+        payload = load_fixture("daily_activity")
+        today = next(d for d in payload["data"] if d["day"] == "2026-10-06")
+        today["class_5_min"] = "3" * slots
+        rig.rsps.replace(responses.GET, api_url("daily_activity"), json=payload)
+
+    def test_a_sleep_period_waits_for_a_ring_sync_after_its_end(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        assert rig.stored(self.NAME, sleep_type="late_nap") == []
+        self.extend_nap(rig, "2026-10-06T15:10:00+00:00")
         rig.advance(3 * 3600 + 301)
         rig.exporter.poll()
-        assert rig.stored(name, sleep_type="late_nap") == [
+        assert rig.stored(self.NAME, sleep_type="late_nap") == []
+        self.sync_until(rig, 140)
+        rig.advance(301)
+        rig.exporter.poll()
+        assert rig.stored(self.NAME, sleep_type="late_nap") == []
+        rig.advance(301)
+        rig.exporter.poll()
+        assert rig.stored(self.NAME, sleep_type="late_nap") == [
             (int(epoch("2026-10-06T15:10:00+00:00") * 1000), 3000.0)
         ]
         assert rig.value("oura_exporter_remote_write_samples_total", result="rejected") == 0
+
+    def test_the_first_cycle_holds_sleep_back_until_a_sync_is_known(self, rig: Rig) -> None:
+        rig.exporter._synced_until = None
+        rig.exporter.poll()
+        assert rig.stored(self.NAME) == []
+        assert rig.stored("oura_daily_activity_score")
+        rig.advance(301)
+        rig.exporter.poll()
+        assert len(rig.stored(self.NAME)) == 2
+
+    def test_the_known_sync_never_moves_back(self, rig: Rig) -> None:
+        rig.exporter.poll()
+        assert rig.exporter._synced_until == datetime(2026, 10, 6, 15, 0, tzinfo=UTC)
+        self.sync_until(rig, 150)
+        rig.advance(301)
+        rig.exporter.poll()
+        assert rig.exporter._synced_until == datetime(2026, 10, 6, 16, 30, tzinfo=UTC)
+        self.sync_until(rig, 20)
+        rig.advance(301)
+        rig.exporter.poll()
+        assert rig.exporter._synced_until == datetime(2026, 10, 6, 16, 30, tzinfo=UTC)
 
 
 class TestRestartAfterRevision:

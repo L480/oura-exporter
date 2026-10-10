@@ -5,7 +5,7 @@ categories:
     kind: event
     prefix: oura_sleep_
     time_path: bedtime_end
-    settle_delay: 10800
+    settle_delay: 1800
     labels:
       - name: sleep_type
         path: type

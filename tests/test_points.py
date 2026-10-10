@@ -6,7 +6,15 @@ from typing import Any
 import pytest
 
 from oura_exporter.definitions import Category, load_definitions
-from oura_exporter.points import JOB, DeliveryLog, Point, build_points, settled_at, to_ms
+from oura_exporter.points import (
+    JOB,
+    DeliveryLog,
+    Point,
+    build_points,
+    settled_at,
+    synced_until,
+    to_ms,
+)
 
 from .helpers import WALL, epoch, load_fixture
 
@@ -117,17 +125,59 @@ class TestEvents:
         assert [timestamp for timestamp, _ in nap] == [epoch("2026-10-06T14:35:00+00:00")]
         assert len(series(found, "oura_sleep_total_sleep_duration_seconds")) == 4
 
-    def test_a_sleep_period_is_held_back_until_three_hours_after_it_ended(self) -> None:
+    def test_a_sleep_period_is_held_back_until_the_ring_synced_after_it(self) -> None:
         nap = [documents("sleep")[2]]
         end = datetime(2026, 10, 6, 14, 35, tzinfo=UTC)
-        assert category("sleep").settle_delay == 10800
-        before = build_points(
-            category("sleep"), nap, end + timedelta(hours=2, minutes=59), live=True
-        )
-        assert before == []
-        after = build_points(category("sleep"), nap, end + timedelta(hours=3), live=True)
-        assert len(series(after, "oura_sleep_total_sleep_duration_seconds")) == 1
-        assert series(after, "oura_sleep_phase_5_min")
+        later = end + timedelta(hours=5)
+        assert category("sleep").settle_delay == 1800
+        name = "oura_sleep_total_sleep_duration_seconds"
+        for synced, pushed in [
+            (end, False),
+            (end + timedelta(minutes=29, seconds=59), False),
+            (end + timedelta(minutes=30), True),
+        ]:
+            found = build_points(category("sleep"), nap, later, live=True, synced_until=synced)
+            assert bool(series(found, name)) is pushed
+        assert series(found, "oura_sleep_phase_5_min")
+
+    def test_a_sleep_synced_partially_overnight_is_not_pushed_by_the_clock(self) -> None:
+        partial = {**documents("sleep")[1], "bedtime_end": "2026-10-06T02:34:00+00:00"}
+        now = datetime(2026, 10, 6, 6, 0, tzinfo=UTC)
+        synced = datetime(2026, 10, 6, 2, 35, tzinfo=UTC)
+        found = build_points(category("sleep"), [partial], now, live=True, synced_until=synced)
+        assert found == []
+        final = {**partial, "bedtime_end": "2026-10-06T06:45:00+00:00"}
+        now = datetime(2026, 10, 6, 7, 30, tzinfo=UTC)
+        synced = datetime(2026, 10, 6, 7, 20, tzinfo=UTC)
+        found = build_points(category("sleep"), [final], now, live=True, synced_until=synced)
+        name = "oura_sleep_total_sleep_duration_seconds"
+        assert [t for t, _ in series(found, name)] == [epoch("2026-10-06T06:45:00+00:00")]
+
+    def test_the_sync_is_capped_at_now(self) -> None:
+        nap = [documents("sleep")[2]]
+        now = datetime(2026, 10, 6, 14, 40, tzinfo=UTC)
+        synced = now + timedelta(hours=2)
+        assert build_points(category("sleep"), nap, now, live=True, synced_until=synced) == []
+
+    def test_without_a_sync_the_wall_clock_decides(self) -> None:
+        nap = [documents("sleep")[2]]
+        end = datetime(2026, 10, 6, 14, 35, tzinfo=UTC)
+        early = build_points(category("sleep"), nap, end + timedelta(minutes=29), live=True)
+        assert early == []
+        on_time = build_points(category("sleep"), nap, end + timedelta(minutes=30), live=True)
+        assert series(on_time, "oura_sleep_total_sleep_duration_seconds")
+
+    def test_synced_until_is_the_end_of_the_last_slot(self) -> None:
+        activity = category("daily_activity")
+        docs = documents("daily_activity")
+        assert synced_until(activity, docs) == datetime(2026, 10, 6, 5, 35, tzinfo=UTC)
+        assert synced_until(activity, []) is None
+        full = {**docs[0], "class_5_min": "3" * 288, "timestamp": "2026-10-07T04:00:00+00:00"}
+        assert synced_until(activity, [*docs, full]) == datetime(2026, 10, 6, 5, 35, tzinfo=UTC)
+        assert synced_until(activity, [full]) is None
+        broken = [{"class_5_min": "", "timestamp": "x"}, {"class_5_min": 5}, *docs]
+        assert synced_until(activity, broken) == datetime(2026, 10, 6, 5, 35, tzinfo=UTC)
+        assert synced_until(category("sleep"), documents("sleep")) is None
 
     def test_settling_an_event_with_an_end_waits_for_the_end(self) -> None:
         workout = dataclasses.replace(category("workout"), settle_delay=3600)

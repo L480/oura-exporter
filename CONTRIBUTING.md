@@ -51,8 +51,8 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
   fixed `interval` and a `start` path. In a `daily` category one `type: string` series can set
   `sync_horizon: true`: while a day has not settled, the series of its document stop from the
   second-to-last slot of that string on (Oura still revises the last two).
-- An `event` category can set `settle_delay` (seconds): the document is skipped until that long
-  after its end (`end_path`, else `time_path`).
+- An `event` category can set `settle_delay` (seconds): the document is skipped until the last ring
+  sync (end of the `sync_horizon` series) is that long after its end (`end_path`, else `time_path`).
 - Enums are gauges with a `mapping` to numbers; document the codes in `help`.
 - A category also takes optional `title` and `summary` keys for the README list. The
   defaults are the name with spaces, and `daily value`, `every sample`, `every event` or

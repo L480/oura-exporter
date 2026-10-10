@@ -592,5 +592,5 @@ def test_settle_delay_is_accepted_for_events() -> None:
     raw = event()
     raw["categories"][0]["settle_delay"] = 60
     assert parse_definitions(raw, "test")[0].settle_delay == 60
-    assert by_name("sleep").settle_delay == 10800
+    assert by_name("sleep").settle_delay == 1800
     assert by_name("workout").settle_delay == 0

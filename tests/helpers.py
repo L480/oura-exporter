@@ -237,6 +237,7 @@ def build_rig(
         monotonic=mono,
         wall=wall,
     )
+    exporter._synced_until = datetime(2026, 10, 6, 15, 0, tzinfo=UTC)
     register_endpoints(rsps)
     tsdb = FakeTsdb(wall)
     rsps.add_callback(responses.POST, WRITE_URL, callback=tsdb.handle)

@@ -169,6 +169,23 @@ def _horizon_ms(series: Series, document: Document) -> int | None:
     return to_ms(start) + round((len(raw) - 2) * series.interval * 1000)
 
 
+def synced_until(category: Category, documents: Iterable[Document]) -> datetime | None:
+    series = category.horizon_series
+    if series is None or series.interval is None:
+        return None
+    full_day = round(86400 / series.interval)
+    latest: datetime | None = None
+    for document in documents:
+        raw = walk(document, series.path)
+        start = parse_datetime(walk(document, series.start or ()))
+        if not isinstance(raw, str) or not raw or len(raw) >= full_day or start is None:
+            continue
+        end = start + timedelta(seconds=len(raw) * series.interval)
+        if latest is None or end > latest:
+            latest = end
+    return latest
+
+
 def _document_points(
     category: Category,
     document: Document,
@@ -204,6 +221,7 @@ def build_points(
     *,
     live: bool,
     cutoff: datetime | None = None,
+    synced_until: datetime | None = None,
     warned: Warned | None = None,
 ) -> list[Point]:
     seen = warned if warned is not None else set()
@@ -223,7 +241,7 @@ def build_points(
             if moment is None:
                 _warn(seen, f"{category.prefix}timestamp", raw, "ignoring unparseable time")
                 continue
-            if not _settled_event(category, document, moment, now):
+            if not _settled_event(category, document, moment, min(synced_until or now, now)):
                 continue
             span = moment if category.kind == "event" else None
             points += _document_points(
@@ -240,7 +258,9 @@ def build_points(
     return _drop_future(category, points, now, seen)
 
 
-def _settled_event(category: Category, document: Document, moment: datetime, now: datetime) -> bool:
+def _settled_event(
+    category: Category, document: Document, moment: datetime, synced: datetime
+) -> bool:
     if category.settle_delay <= 0:
         return True
     reference = moment
@@ -249,7 +269,7 @@ def _settled_event(category: Category, document: Document, moment: datetime, now
         if end is None:
             return False
         reference = end
-    return reference + timedelta(seconds=category.settle_delay) <= now
+    return reference + timedelta(seconds=category.settle_delay) <= synced
 
 
 def _drop_future(

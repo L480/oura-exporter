@@ -112,8 +112,9 @@ about a day before it, and a late ring sync can add samples long after the fact.
 - **Revisions.** A receiver keeps the first value of a timestamp, so values Oura still revises
   are held back instead of pushed early. Activity series (`met`, `class_5_min`) of a day that has
   not settled stop from the second-to-last `class_5_min` slot on, because Oura still revises the last two
-  (the last holds the last synced minute; Oura pads `met` with 0.9 up to the end of the day). Sleep periods are pushed 3 hours after
-  they ended. A value that changes after it was delivered anyway is not sent again; it is
+  (the last holds the last synced minute; Oura pads `met` with 0.9 up to the end of the day).
+  Sleep periods are pushed once the ring has synced at least 30 minutes after they ended (the
+  end of the last `class_5_min` slot is the sync time; the ring does not sync while asleep). A value that changes after it was delivered anyway is not sent again; it is
   counted in `oura_exporter_sample_revisions_total{category}`, the details are logged at debug.
 - **Missing values.** A field Oura reports as `null`, for example because a scope was not
   granted or there is not enough data, is left out.
@@ -191,8 +192,8 @@ groups:
 
 - Data only arrives when the Oura app syncs with the ring. Sleep data needs the app to be
   opened; activity and stress may sync in the background.
-- Daily values are revised by Oura. A day is pushed as final 12 hours after it ended, sleep 3
-  hours after it ended; later revisions are counted, not sent, because a receiver cannot
+- Daily values are revised by Oura. A day is pushed as final 12 hours after it ended, sleep once the ring
+  has synced 30 minutes after it ended; later revisions are counted, not sent, because a receiver cannot
   overwrite a sample.
 - Everything inside `OURA_LOOKBACK_DAYS` is read again in every poll, which costs one request
   per category and range. Raise `OURA_POLL_INTERVAL` before raising the lookback.

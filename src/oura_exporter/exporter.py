@@ -18,7 +18,7 @@ from oura_exporter.api import OuraApiError, OuraClient, RateLimitedError
 from oura_exporter.auth import AuthError, TokenManager
 from oura_exporter.definitions import Category
 from oura_exporter.fetching import DocumentFetcher
-from oura_exporter.points import DeliveryLog, Point, build_points
+from oura_exporter.points import DeliveryLog, Point, build_points, synced_until
 from oura_exporter.remote_write import RemoteWriter
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ class Exporter:
         self._paused_until = 0.0
         self._cycle_fetched = False
         self._warned: set[tuple[str, str]] = set()
+        self._tracks_sync = any(category.horizon_series for category in self._categories)
+        self._synced_until: datetime | None = None
 
         self.registry = CollectorRegistry()
         ProcessCollector(registry=self.registry)
@@ -166,8 +168,21 @@ class Exporter:
         cutoff = moment - self._lookback
         try:
             documents = self._fetcher.fetch(category, cutoff, moment)
+            documents = list(documents)
+            known = synced_until(category, documents)
+            if known is not None and (self._synced_until is None or known > self._synced_until):
+                self._synced_until = known
+            synced = None
+            if self._tracks_sync:
+                synced = self._synced_until or datetime.fromtimestamp(0, tz=UTC)
             points = build_points(
-                category, documents, moment, live=True, cutoff=cutoff, warned=self._warned
+                category,
+                documents,
+                moment,
+                live=True,
+                cutoff=cutoff,
+                synced_until=synced,
+                warned=self._warned,
             )
         except RateLimitedError as exc:
             self._paused_until = now + exc.retry_after
