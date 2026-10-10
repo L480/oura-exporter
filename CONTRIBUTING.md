@@ -49,8 +49,8 @@ Metrics are YAML only, add an entry to `src/oura_exporter/metrics.yml`:
   string fields into labels (never free text), `series` export embedded time series: `type:
   samples` for `{interval, items, timestamp}` objects, `type: string` for digit strings with a
   fixed `interval` and a `start` path. In a `daily` category one `type: string` series can set
-  `sync_horizon: true`: while a day has not settled, the series of its document stop before the
-  last slot of that string (the slot Oura is still filling).
+  `sync_horizon: true`: while a day has not settled, the series of its document stop from the
+  second-to-last slot of that string on (Oura still revises the last two).
 - An `event` category can set `settle_delay` (seconds): the document is skipped until that long
   after its end (`end_path`, else `time_path`).
 - Enums are gauges with a `mapping` to numbers; document the codes in `help`.

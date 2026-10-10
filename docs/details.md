@@ -111,8 +111,8 @@ about a day before it, and a late ring sync can add samples long after the fact.
 - **Profile** (`personal_info`, `ring_configuration`) is pushed at fetch time, refreshed hourly.
 - **Revisions.** A receiver keeps the first value of a timestamp, so values Oura still revises
   are held back instead of pushed early. Activity series (`met`, `class_5_min`) of a day that has
-  not settled stop before the last `class_5_min` slot, the one holding the last synced minute
-  (Oura pads `met` with 0.9 up to the end of the day). Sleep periods are pushed 3 hours after
+  not settled stop from the second-to-last `class_5_min` slot on, because Oura still revises the last two
+  (the last holds the last synced minute; Oura pads `met` with 0.9 up to the end of the day). Sleep periods are pushed 3 hours after
   they ended. A value that changes after it was delivered anyway is not sent again; it is
   counted in `oura_exporter_sample_revisions_total{category}`, the details are logged at debug.
 - **Missing values.** A field Oura reports as `null`, for example because a scope was not

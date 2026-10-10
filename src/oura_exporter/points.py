@@ -164,9 +164,9 @@ def _sample_points(
 def _horizon_ms(series: Series, document: Document) -> int | None:
     raw = walk(document, series.path)
     start = parse_datetime(walk(document, series.start or ()))
-    if not isinstance(raw, str) or not raw or start is None or series.interval is None:
+    if not isinstance(raw, str) or len(raw) < 2 or start is None or series.interval is None:
         return None
-    return to_ms(start) + round((len(raw) - 1) * series.interval * 1000)
+    return to_ms(start) + round((len(raw) - 2) * series.interval * 1000)
 
 
 def _document_points(

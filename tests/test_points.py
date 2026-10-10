@@ -337,8 +337,8 @@ class TestDaily:
         assert (start + 60, 1.0) in met
         classes = series(found, "oura_daily_activity_class_5_min")
         assert (start, 1.0) in classes
-        assert (start + 300 * 17, 5.0) in classes
-        assert (start + 300 * 18, 5.0) not in classes
+        assert (start + 300 * 16, 5.0) in classes
+        assert (start + 300 * 17, 5.0) not in classes
 
     def synced_day(self, sync_minute: int = 620) -> dict[str, Any]:
         document = dict(documents("daily_activity")[1])
@@ -354,18 +354,26 @@ class TestDaily:
         category_ = category("daily_activity")
         document = self.synced_day()
         found = build_points(category_, [document], NOW, live=True)
-        last_slot = epoch("2026-10-06T04:00:00+00:00") + 300 * 123
+        limit = epoch("2026-10-06T04:00:00+00:00") + 300 * 122
         met = series(found, "oura_daily_activity_met")
         classes = series(found, "oura_daily_activity_class_5_min")
-        assert len(classes) == 123
-        assert max(ts for ts, _ in classes) == last_slot - 300
-        assert len(met) == 615
-        assert all(ts < last_slot for ts, _ in met + classes)
+        assert len(classes) == 122
+        assert max(ts for ts, _ in classes) == limit - 300
+        assert len(met) == 610
+        assert all(ts < limit for ts, _ in met + classes)
         assert series(found, "oura_daily_activity_score")
         settled = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
         found = build_points(category_, [document], settled, live=False)
         assert len(series(found, "oura_daily_activity_met")) == 1440
         assert len(series(found, "oura_daily_activity_class_5_min")) == 124
+
+    @pytest.mark.parametrize(("slots", "expected"), [(1, 0), (2, 0), (3, 1)])
+    def test_the_horizon_withholds_the_last_two_slots(self, slots: int, expected: int) -> None:
+        document = self.synced_day()
+        document["class_5_min"] = "3" * slots
+        found = build_points(category("daily_activity"), [document], NOW, live=True)
+        assert len(series(found, "oura_daily_activity_class_5_min")) == expected
+        assert len(series(found, "oura_daily_activity_met")) == expected * 5
 
     def test_activity_without_the_horizon_string_pushes_no_series_until_settled(self) -> None:
         document = self.synced_day()
