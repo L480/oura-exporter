@@ -81,6 +81,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.platform }}
