@@ -12,8 +12,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-dev --no-install-project
 COPY . .
+ARG VERSION=0.0.0
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv version --frozen "${VERSION}" \
+    && uv sync --frozen --no-dev --no-editable
 
 FROM python:3.14-slim-trixie
 RUN groupadd --system --gid 6872 oura-exporter \
