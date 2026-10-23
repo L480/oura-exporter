@@ -175,6 +175,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # A release published by hand from the GitHub UI already exists at
+          # this point; keep it instead of failing the run.
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "::notice::Release ${TAG} already exists; leaving it as is"
+            exit 0
+          fi
           notes="$(mktemp)"
           {
             git tag -l --format='%(contents)' "${TAG}"
