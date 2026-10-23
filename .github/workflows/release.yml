@@ -68,6 +68,12 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ env.REPO_OWNER }}/oura-exporter
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
 
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -175,9 +181,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          # UI-published releases already exist: keep them untouched.
+          # UI-published releases already exist: keep their notes.
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "::notice::Release ${TAG} already exists; leaving it as is"
+            echo "::notice::Release ${TAG} already exists; keeping its notes"
             exit 0
           fi
           notes="$(mktemp)"
