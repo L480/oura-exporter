@@ -18,6 +18,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && uv sync --frozen --no-dev --no-editable
 
 FROM python:3.14-slim-trixie
+# The upstream python image lags Debian security updates (e.g. zlib1g
+# CVE-2026-76844/CVE-2026-85091, fixed in deb13u1); pull them in at build time.
+# hadolint ignore=DL3005
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 6872 oura-exporter \
     && useradd --system --uid 6872 --gid 6872 --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin oura-exporter \
