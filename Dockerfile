@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.14-slim-trixie AS build
+FROM python:3.15-slim-trixie AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv version --frozen "${VERSION}" \
     && uv sync --frozen --no-dev --no-editable
 
-FROM python:3.14-slim-trixie
+FROM python:3.15-slim-trixie
 # The upstream python image lags Debian security updates (e.g. zlib1g
 # CVE-2026-76844/CVE-2026-85091, fixed in deb13u1); pull them in at build time.
 # hadolint ignore=DL3005
