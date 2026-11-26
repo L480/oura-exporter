@@ -38,6 +38,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1
 # A path, not a secret.
 # hadolint ignore=DL3064
+# trivy:ignore:DS-0031 -- OURA_TOKEN_PATH is a file path, not a secret value; the token itself is mounted at runtime.
 ENV OURA_TOKEN_PATH=/data/oauth_token.json
 USER 6872:6872
 EXPOSE 8000
