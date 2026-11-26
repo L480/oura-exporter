@@ -4,7 +4,7 @@ Thanks for considering a contribution to `oura-exporter`.
 
 ## Development setup
 
-Requires [uv](https://docs.astral.sh/uv/). Python 3.14 is picked up from `.python-version`.
+Requires [uv](https://docs.astral.sh/uv/). Python 3.15 is picked up from `.python-version`.
 
 ```bash
 uv sync
