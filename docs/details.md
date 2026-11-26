@@ -220,7 +220,7 @@ groups:
 
 ## Running from source
 
-Requires [uv](https://docs.astral.sh/uv/); Python 3.14 is selected from `.python-version`.
+Requires [uv](https://docs.astral.sh/uv/); Python 3.15 is selected from `.python-version`.
 
 ```bash
 git clone https://github.com/L480/oura-exporter.git && cd oura-exporter
